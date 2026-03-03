@@ -1,4 +1,3 @@
-// FastDrawingView.java
 package com.example.drawingapp;
 
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -20,15 +19,14 @@ import android.view.SurfaceView;
 import androidx.annotation.NonNull;
 import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer;
 
+import com.example.drawingapp.tools.Eraser;
+import com.example.drawingapp.tools.Pen;
+
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
 
 public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callback {
-
-    // ─── Tool modes ───────────────────────────────────────────────
-    public enum ToolMode { BRUSH, ERASER, EMPTY }
-    private ToolMode toolMode = ToolMode.BRUSH;
 
     // ─── Renderer ─────────────────────────────────────────────────
     private CanvasFrontBufferedRenderer<float[]> frontRenderer;
@@ -43,27 +41,23 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
 
     // ─── Undo ─────────────────────────────────────────────────────
     private final Deque<Bitmap> undoStack = new ArrayDeque<>();
-    private static final int MAX_UNDO = 20;
+    private static final int MAX_UNDO = 120;
 
     // ─── Active stroke tracking ───────────────────────────────────
     private int currentPointerId = -1;
-    private float[] lastPoint = null;   // [x, y, pressure]
+    private float[] lastPoint = null; // [x, y, pressure]
 
     // ─── Eraser state & throttling ────────────────────────────────
-    private volatile boolean eraserTouching;
     private volatile float eraserX, eraserY, eraserPressure;
     private float lastEraserX, lastEraserY;
-    private long lastCommitTime = 0; // Used to prevent queue jamming
+    private long lastCommitTime = 0;
 
-    // ─── Brush config ─────────────────────────────────────────────
-    private Brush activeBrush;
-    private Brush eraserBrush;
-    private int inkColor = Color.BLACK;
+    // ─── Tool manager ─────────────────────────────────────────────
+    private final ToolManager toolManager = ToolManager.getInstance();
 
-    // ─── Paints (re-used; never allocate in draw callbacks) ───────
-    private final Paint ribbonPaint;
-    private final Paint capPaint;
-    private final Paint eraserPaint;
+    // ─── Paints ───────────────────────────────────────────────────
+    private final Paint penPaint   = createPenPaint();
+    private final Paint eraserPaint = createEraserPaint();
     private final Paint bitmapPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
 
     private volatile boolean pendingCommit = false;
@@ -72,30 +66,29 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
 
     public FastDrawingView(Context context) {
         super(context);
-
-        activeBrush = new Brush(14f, Color.BLACK, 30f, 100f);
-        eraserBrush = new Brush(14f, Color.BLACK, 0f, 25f);
-
-        // Ribbon / cap paints
-        ribbonPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        ribbonPaint.setStyle(Paint.Style.FILL);
-        ribbonPaint.setColor(inkColor);
-
-        capPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        capPaint.setStyle(Paint.Style.FILL);
-        capPaint.setColor(inkColor);
-
-        // Eraser paints - TRUE erase cutting through the bitmap
-        eraserPaint = new Paint();
-        eraserPaint.setStyle(Paint.Style.STROKE);
-        eraserPaint.setStrokeCap(Paint.Cap.ROUND);
-        eraserPaint.setStrokeJoin(Paint.Join.ROUND);
-        eraserPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
-
         setFocusable(true);
         setFocusableInTouchMode(true);
         getHolder().addCallback(this);
     }
+
+    // ─── Paint factories ──────────────────────────────────────────
+
+    private static Paint createPenPaint() {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setStyle(Paint.Style.FILL);
+        return p;
+    }
+
+    private static Paint createEraserPaint() {
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setStyle(Paint.Style.STROKE);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setStrokeJoin(Paint.Join.ROUND);
+        p.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
+        return p;
+    }
+
+    // ─── Surface lifecycle ────────────────────────────────────────
 
     @Override
     public void surfaceCreated(@NonNull SurfaceHolder holder) {
@@ -128,8 +121,23 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
         }
     }
 
-    public void setcanvasOverlay(CanvasOverlay overlay) {
+    public void setCanvasOverlay(CanvasOverlay overlay) {
         this.canvasOverlay = overlay;
+    }
+
+    // ─── CanvasOverlay helpers ────────────────────────────────────
+
+    private void overlayUpdateLinePreview(float x, float y, float sx, float sy, float width, int color) {
+        if (canvasOverlay != null) canvasOverlay.updateLinePreview(x, y, sx, sy, width, color);
+    }
+    private void overlayUpdateCursor(float x, float y, float pressure) {
+        if (canvasOverlay != null) canvasOverlay.updateCursor(x, y, pressure);
+    }
+    private void overlayHideCursor() {
+        if (canvasOverlay != null) canvasOverlay.hideCursor();
+    }
+    private void overlayHideLinePreview() {
+        if (canvasOverlay != null) canvasOverlay.hideLinePreview();
     }
 
     // ─── CanvasFrontBufferedRenderer callbacks ────────────────────
@@ -143,21 +151,12 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                         int i, int i1,
                         @NonNull Collection<? extends float[]> collection) {
 
-                    // Clear and draw the base layer
                     canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
                     canvas.drawColor(Color.WHITE);
-                    if (canvasBitmap != null) {
-                        canvas.drawBitmap(canvasBitmap, 0, 0, bitmapPaint);
-                    }
+                    if (canvasBitmap != null) canvas.drawBitmap(canvasBitmap, 0, 0, bitmapPaint);
 
-                    // Re-draw any in-progress brush stroke that hasn't been
-                    // committed to canvasBitmap yet. Without this, a commit()
-                    // call (e.g. from the eraser) clears the front buffer and
-                    // the multi-buffer shows a stale canvas — causing the
-                    // "stuttery / disappearing stroke" bug when switching tools.
-                    if (toolMode == ToolMode.BRUSH && strokePoints.size() > 1) {
-                        ribbonPaint.setColor(inkColor);
-                        capPaint.setColor(inkColor);
+                    if (toolManager.getCurrentToolType() == ToolManager.ToolType.PEN && strokePoints.size() > 1) {
+                        penPaint.setColor(toolManager.getActivePen().getColor());
                         float[] prev = null;
                         for (float[] pt : strokePoints) {
                             if (prev != null) renderSegment(prev, pt, canvas);
@@ -174,10 +173,7 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                         int bufferHeight,
                         @NonNull float[] segment) {
 
-                    // BRUSH MODE: Accumulate ink on the front buffer
-                    ribbonPaint.setColor(inkColor);
-                    capPaint.setColor(inkColor);
-
+                    penPaint.setColor(toolManager.getActivePen().getColor());
                     if (segment.length == 6) {
                         float[] a = {segment[0], segment[1], segment[2]};
                         float[] b = {segment[3], segment[4], segment[5]};
@@ -191,15 +187,16 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         if (event.getToolType(event.getActionIndex()) != MotionEvent.TOOL_TYPE_STYLUS) return true;
-        if (toolMode == ToolMode.EMPTY) return true;
-        if (toolMode == ToolMode.BRUSH) handleBrushTouch(event);
-        else handleEraserTouch(event);
+        switch (toolManager.getCurrentToolType()) {
+            case PEN:    handlePenTouch(event);    break;
+            case ERASER: handleEraserTouch(event); break;
+        }
         return true;
     }
 
-    // ─── Brush touch ──────────────────────────────────────────────
+    // ─── Pen touch ────────────────────────────────────────────────
 
-    private void handleBrushTouch(MotionEvent event) {
+    private void handlePenTouch(MotionEvent event) {
         if (frontRenderer == null) return;
         int idx = event.findPointerIndex(currentPointerId);
 
@@ -228,8 +225,8 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
             case MotionEvent.ACTION_CANCEL: {
                 if (currentPointerId == -1) break;
                 commitStrokeToBitmap();
-                canvasOverlay.hideLinePreview();
-                frontRenderer.commit(); // Only committed ONCE at the end for Brush
+                overlayHideLinePreview();
+                frontRenderer.commit();
                 strokePoints.clear();
                 currentPointerId = -1;
                 lastPoint = null;
@@ -238,12 +235,15 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
         }
     }
 
-    private float CalculateSmoothingFactor(float smoothing) {
+    // ─── Stroke helpers ───────────────────────────────────────────
+
+    private float calculateSmoothingFactor(float smoothing) {
         return 1f - (smoothing / 100f * 0.95f);
     }
 
     private void consumePoint(float x, float y, float pressure) {
-        float p = pressure < 0.01f ? 0.5f : Math.min(pressure, 1f);
+        float p = Math.max(0.02f, pressure);
+        Pen pen = toolManager.getActivePen();
 
         if (lastPoint == null) {
             lastPoint = new float[]{x, y, p};
@@ -252,26 +252,24 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
             return;
         }
 
-        float sf = CalculateSmoothingFactor(activeBrush.getSmoothingPercent());
+        float sf = calculateSmoothingFactor(pen.getSmoothing());
         float sx = lastPoint[0] + (x - lastPoint[0]) * sf;
         float sy = lastPoint[1] + (y - lastPoint[1]) * sf;
         float sp = lastPoint[2] + (p - lastPoint[2]) * Math.min(sf + 0.2f, 1f);
 
-        float[] newPt = {sx, sy, sp};
+        float[] newPt   = {sx, sy, sp};
         float[] segment = {lastPoint[0], lastPoint[1], lastPoint[2], newPt[0], newPt[1], newPt[2]};
 
-        if (canvasOverlay != null) canvasOverlay.updateLinePreview(x, y, sx, sy, halfWidth(p) * 2f, ribbonPaint.getColor());
+        overlayUpdateLinePreview(x, y, sx, sy, calculatePressureStrokeWidth(p, pen), penPaint.getColor());
 
         strokePoints.add(newPt.clone());
         lastPoint = newPt;
-
         frontRenderer.renderFrontBufferedLayer(segment);
     }
 
     private void commitStrokeToBitmap() {
         if (bitmapCanvas == null) return;
-        ribbonPaint.setColor(inkColor);
-        capPaint.setColor(inkColor);
+        penPaint.setColor(toolManager.getActivePen().getColor());
         float[] prev = null;
         for (float[] pt : strokePoints) {
             if (prev != null) renderSegment(prev, pt, bitmapCanvas);
@@ -280,46 +278,42 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
         }
     }
 
-    // ─── Eraser touch (Throttled TRUE Erase) ──────────────────────
+    // ─── Eraser touch ─────────────────────────────────────────────
+
     private void handleEraserTouch(MotionEvent event) {
         float x = event.getX(), y = event.getY();
         float pressure = event.getPressure();
+        Eraser eraser = toolManager.getActiveEraser();
 
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
                 pushUndo();
-                eraserTouching = true;
                 eraserX = x; eraserY = y;
                 lastEraserX = x; lastEraserY = y;
                 eraserPressure = pressure;
                 lastCommitTime = SystemClock.elapsedRealtime();
 
-                eraserPaint.setStrokeWidth(8f + eraserPressure * 60f);
-                if (bitmapCanvas != null) {
-                    bitmapCanvas.drawPoint(x, y, eraserPaint);
-                }
-                if (frontRenderer != null) {
-                    frontRenderer.commit();
-                }
-                if (canvasOverlay != null) canvasOverlay.updateCursor(eraserX, eraserY, eraserPressure);
+                eraserPaint.setStrokeWidth(calculateEraserStrokeWidth(eraserPressure, eraser));
+                if (bitmapCanvas != null) bitmapCanvas.drawPoint(x, y, eraserPaint);
+                if (frontRenderer != null) frontRenderer.commit();
+                overlayUpdateCursor(eraserX, eraserY, eraserPressure);
                 break;
             }
             case MotionEvent.ACTION_MOVE: {
-                float sf = CalculateSmoothingFactor(eraserBrush.getSmoothingPercent());
+                float sf = calculateSmoothingFactor(eraser.getSmoothing());
                 eraserX += (x - eraserX) * sf;
                 eraserY += (y - eraserY) * sf;
                 eraserPressure += (pressure - eraserPressure) * 0.15f;
 
-                eraserPaint.setStrokeWidth(8f + eraserPressure * 60f);
-                if (bitmapCanvas != null) {
+                eraserPaint.setStrokeWidth(calculateEraserStrokeWidth(eraserPressure, eraser));
+                if (bitmapCanvas != null)
                     bitmapCanvas.drawLine(lastEraserX, lastEraserY, eraserX, eraserY, eraserPaint);
-                }
 
                 lastEraserX = eraserX;
                 lastEraserY = eraserY;
 
                 long now = SystemClock.elapsedRealtime();
-                if (frontRenderer != null && !pendingCommit && (now - lastCommitTime) > 32) { // ~30fps cap
+                if (frontRenderer != null && !pendingCommit && (now - lastCommitTime) > 32) {
                     pendingCommit = true;
                     lastCommitTime = now;
                     post(() -> {
@@ -327,59 +321,59 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                         pendingCommit = false;
                     });
                 }
-                if (canvasOverlay != null) canvasOverlay.updateCursor(eraserX, eraserY, eraserPressure);
+                overlayUpdateCursor(eraserX, eraserY, eraserPressure);
                 break;
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
-                eraserTouching = false;
-                if (frontRenderer != null) {
-                    frontRenderer.commit();
-                }
-                if (canvasOverlay != null) canvasOverlay.hideCursor();
+                if (frontRenderer != null) frontRenderer.commit();
+                overlayHideCursor();
                 break;
             }
         }
     }
 
-    // ─── Custom stroke renderer ───────────────────────────────────
+    // ─── Stroke renderer ──────────────────────────────────────────
 
     public void renderSegment(float[] a, float[] b, Canvas target) {
-        float ax = a[0], ay = a[1], ap = a[2];
-        float bx = b[0], by = b[1], bp = b[2];
+        Pen pen = toolManager.getActivePen();
+        float wa = calculatePressureStrokeWidth(a[2], pen) / 2f;
+        float wb = calculatePressureStrokeWidth(b[2], pen) / 2f;
 
-        float wa = halfWidth(ap);
-        float wb = halfWidth(bp);
+        target.drawCircle(a[0], a[1], wa, penPaint);
+        target.drawCircle(b[0], b[1], wb, penPaint);
 
-        target.drawCircle(ax, ay, wa, capPaint);
-        target.drawCircle(bx, by, wb, capPaint);
-
-        float dx = bx - ax, dy = by - ay;
+        float dx = b[0] - a[0], dy = b[1] - a[1];
         float len = (float) Math.sqrt(dx * dx + dy * dy);
         if (len < 0.5f) return;
 
         float nx = -dy / len, ny = dx / len;
 
-        float l0x = ax + nx * wa, l0y = ay + ny * wa;
-        float r0x = ax - nx * wa, r0y = ay - ny * wa;
-        float l1x = bx + nx * wb, l1y = by + ny * wb;
-        float r1x = bx - nx * wb, r1y = by - ny * wb;
-
         Path seg = new Path();
-        seg.moveTo(l0x, l0y);
-        seg.lineTo(l1x, l1y);
-        seg.lineTo(r1x, r1y);
-        seg.lineTo(r0x, r0y);
+        seg.moveTo(a[0] + nx * wa, a[1] + ny * wa);
+        seg.lineTo(b[0] + nx * wb, b[1] + ny * wb);
+        seg.lineTo(b[0] - nx * wb, b[1] - ny * wb);
+        seg.lineTo(a[0] - nx * wa, a[1] - ny * wa);
         seg.close();
-        target.drawPath(seg, ribbonPaint);
+        target.drawPath(seg, penPaint);
     }
 
-    private float halfWidth(float pressure) {
-        float base = activeBrush.getBrushWidth();
-        float sensitivity = activeBrush.getPressureSensitivity() / 100f;
-        float clamped = Math.max(0f, Math.min(1f, pressure < 0.01f ? 0.5f : pressure));
-        float minW = base * (1f - sensitivity * 0.75f);
-        return (minW + (base - minW) * clamped) * 0.5f;
+    // ─── Width calculations ───────────────────────────────────────
+
+    public static float calculatePressureStrokeWidth(float pressure, Pen pen) {
+        float base        = pen.getWidth();
+        float sensitivity = pen.getPressureSensitivity() / 100f;
+        float clamped     = Math.max(0f, Math.min(1f, pressure < 0.01f ? 0.5f : pressure));
+        float minW        = Math.max(base * (1f - sensitivity), base * 0.05f);
+        return minW + (base - minW) * clamped;
+    }
+
+    public static float calculateEraserStrokeWidth(float pressure, Eraser eraser) {
+        float base        = eraser.getWidth();
+        float sensitivity = eraser.getPressureSensitivity() / 100f;
+        float clamped     = Math.max(0f, Math.min(1f, pressure < 0.01f ? 0.5f : pressure));
+        float minW        = Math.max(base * (1f - sensitivity), base * 0.05f);
+        return minW + (base - minW) * clamped;
     }
 
     // ─── Undo ─────────────────────────────────────────────────────
@@ -399,52 +393,21 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
         if (frontRenderer != null) frontRenderer.commit();
     }
 
-    // ─── Public API ───────────────────────────────────────────────
-
-    public void setToolMode(ToolMode mode) {
-        this.toolMode = mode;
-        pendingCommit = false; // discard any queued eraser commits
-        removeCallbacks(null); // cancel pending post() runnables
-    }
-    public ToolMode getToolMode() { return toolMode; }
-    public void setInkColor(int c) { inkColor = c; }
-    public void setInkSize(float size) {
-        activeBrush = new Brush(size, inkColor,
-                activeBrush.getSmoothingPercent(), activeBrush.getPressureSensitivity());
-    }
-    public void setSmoothing(float s) {
-        activeBrush = new Brush(activeBrush.getBrushWidth(), inkColor,
-                s, activeBrush.getPressureSensitivity());
-    }
-    public void setPressureSensitivity(float s) {
-        activeBrush = new Brush(activeBrush.getBrushWidth(), inkColor,
-                activeBrush.getSmoothingPercent(), s);
-    }
-    public Brush getActiveBrush() { return activeBrush; }
-
     // ─── Hardware keys ────────────────────────────────────────────
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_PAGE_DOWN) {
-            event.startTracking();
-            toolMode = (toolMode == ToolMode.ERASER) ? ToolMode.BRUSH : ToolMode.ERASER;
-            return true;
-        }
+        if (keyCode == KeyEvent.KEYCODE_PAGE_DOWN) return true;
         return super.onKeyDown(keyCode, event);
     }
 
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_PAGE_UP) { undo(); return true; }
-        if (keyCode == KeyEvent.KEYCODE_PAGE_DOWN) { return true; }
+        if (keyCode == KeyEvent.KEYCODE_PAGE_UP)   {
+            undo();
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_PAGE_DOWN)  return true;
         return super.onKeyUp(keyCode, event);
-    }
-
-    @Override
-    public boolean onKeyLongPress(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_PAGE_UP ||
-                keyCode == KeyEvent.KEYCODE_PAGE_DOWN) return true;
-        return super.onKeyLongPress(keyCode, event);
     }
 }

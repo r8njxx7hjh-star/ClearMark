@@ -1,6 +1,7 @@
 package com.example.drawingapp;
 
 import android.os.Bundle;
+import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
 
@@ -14,34 +15,31 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.main_activity);
 
         FastDrawingView drawingView = new FastDrawingView(this);
-        CanvasOverlay cursorOverlay = new CanvasOverlay(this);
+        CanvasOverlay visualOverlay = new CanvasOverlay(this);
 
         FrameLayout container = findViewById(R.id.drawing_view);
         container.addView(drawingView);
-        container.addView(cursorOverlay, new FrameLayout.LayoutParams(
+        container.addView(visualOverlay, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT));
 
-        drawingView.setcanvasOverlay(cursorOverlay);
+        drawingView.setCanvasOverlay(visualOverlay);
+        drawingView.requestFocus();
 
-        ImageButton BUTTON_Brush = findViewById(R.id.BUTTON_BRUSH);
-        ImageButton BUTTON_Eraser = findViewById(R.id.BUTTON_ERASER);
+        ImageButton buttonBrush  = findViewById(R.id.BUTTON_BRUSH);
+        ImageButton buttonEraser = findViewById(R.id.BUTTON_ERASER);
 
-        BUTTON_Brush.setOnClickListener(v -> selectTool(drawingView, BUTTON_Brush, BUTTON_Eraser, FastDrawingView.ToolMode.BRUSH));
-        BUTTON_Eraser.setOnClickListener(v -> selectTool(drawingView, BUTTON_Brush, BUTTON_Eraser, FastDrawingView.ToolMode.ERASER));
+        buttonBrush.setOnClickListener(v  -> selectTool(ToolManager.ToolType.PEN,    buttonBrush, buttonEraser));
+        buttonEraser.setOnClickListener(v -> selectTool(ToolManager.ToolType.ERASER, buttonBrush, buttonEraser));
 
-        selectTool(drawingView, BUTTON_Brush, BUTTON_Eraser, FastDrawingView.ToolMode.BRUSH);
+        selectTool(ToolManager.ToolType.PEN, buttonBrush, buttonEraser);
     }
 
-    private void selectTool(FastDrawingView drawingView, ImageButton BUTTON_Brush, ImageButton BUTTON_Eraser, FastDrawingView.ToolMode mode) {
-        if (drawingView.getToolMode() == mode) {
-            drawingView.setToolMode(FastDrawingView.ToolMode.EMPTY);
-            BUTTON_Brush.setSelected(false);
-            BUTTON_Eraser.setSelected(false);
-        } else {
-            drawingView.setToolMode(mode);
-            BUTTON_Brush.setSelected(mode == FastDrawingView.ToolMode.BRUSH);
-            BUTTON_Eraser.setSelected(mode == FastDrawingView.ToolMode.ERASER);
-        }
+    private void selectTool(ToolManager.ToolType tool, ImageButton buttonBrush, ImageButton buttonEraser) {
+        ToolManager.getInstance().setCurrentTool(tool, 0);
+        buttonBrush.setSelected(tool  == ToolManager.ToolType.PEN);
+        buttonEraser.setSelected(tool == ToolManager.ToolType.ERASER);
     }
+
+
 }

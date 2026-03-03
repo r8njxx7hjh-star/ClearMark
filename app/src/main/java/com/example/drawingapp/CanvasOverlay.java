@@ -9,12 +9,13 @@ import android.view.View;
 public class CanvasOverlay extends View {
 
     private float cursorX, cursorY, cursorPressure;
-    private float lineX, lineY, smoothX, smoothY, linePressure;
+    private float lineX, lineY, smoothX, smoothY, lineWidth;
     private int lineColor;
-    private boolean EraserVisible = false;
-    private boolean LinePreviewVisible = false;
+    private boolean eraserVisible = false;
+    private boolean linePreviewVisible = false;
 
-    private final Paint cursorPaint, linePreview;
+    private final Paint cursorPaint;
+    private final Paint linePreviewPaint;
 
     public CanvasOverlay(Context context) {
         super(context);
@@ -27,52 +28,50 @@ public class CanvasOverlay extends View {
         cursorPaint.setColor(Color.GRAY);
         cursorPaint.setStrokeWidth(4f);
 
-        linePreview = new Paint(Paint.ANTI_ALIAS_FLAG);
-        linePreview.setStyle(Paint.Style.STROKE);
+        linePreviewPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        linePreviewPaint.setStyle(Paint.Style.STROKE);
     }
 
     public void updateCursor(float x, float y, float pressure) {
         cursorX = x;
         cursorY = y;
         cursorPressure = pressure;
-        EraserVisible = true;
+        eraserVisible = true;
         invalidate();
     }
 
     public void hideCursor() {
-        EraserVisible = false;
+        eraserVisible = false;
         invalidate();
     }
 
-    public void updateLinePreview(float x, float y, float sx, float sy, float pressure, int color) {
-        LinePreviewVisible = true;
+    public void updateLinePreview(float x, float y, float sx, float sy, float width, int color) {
+        linePreviewVisible = true;
         lineX = x;
         lineY = y;
         smoothX = sx;
         smoothY = sy;
-        linePressure = pressure;
+        lineWidth = width;
         lineColor = color;
         invalidate();
     }
 
     public void hideLinePreview() {
-        LinePreviewVisible = false;
+        linePreviewVisible = false;
         invalidate();
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
-        if (EraserVisible) {
-            float r = 20f + cursorPressure * 30f;
-            canvas.drawCircle(cursorX, cursorY, r / 2, cursorPaint);
+        if (eraserVisible) {
+            float r = FastDrawingView.calculateEraserStrokeWidth(cursorPressure, ToolManager.getInstance().getActiveEraser());
+            canvas.drawCircle(cursorX, cursorY, r / 2f, cursorPaint);
         }
-        if (LinePreviewVisible) {
-            linePreview.setStrokeWidth(linePressure);
-            linePreview.setColor(lineColor);
-            canvas.drawLine(lineX, lineY, smoothX, smoothY, linePreview);
+        if (linePreviewVisible) {
+            linePreviewPaint.setStrokeWidth(lineWidth);
+            linePreviewPaint.setColor(lineColor);
+            canvas.drawLine(lineX, lineY, smoothX, smoothY, linePreviewPaint);
         }
     }
-
-
 }
