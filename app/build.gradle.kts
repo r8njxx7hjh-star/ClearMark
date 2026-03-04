@@ -34,7 +34,6 @@ android {
 dependencies {
     // ── Existing ──────────────────────────────────────────────────
     implementation(libs.appcompat)
-    implementation(libs.material)
     implementation(libs.constraintlayout)
     implementation(libs.motion.prediction)
     testImplementation(libs.junit)
@@ -49,5 +48,6 @@ dependencies {
     implementation("androidx.ink:ink-nativeloader:$inkVersion")
     implementation("androidx.ink:ink-rendering:$inkVersion")
     implementation("androidx.ink:ink-strokes:$inkVersion")
+    implementation("com.google.android.material:material:1.11.0")
     implementation("androidx.graphics:graphics-core:1.0.2")
 }
