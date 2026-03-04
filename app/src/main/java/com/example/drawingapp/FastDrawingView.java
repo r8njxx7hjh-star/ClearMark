@@ -99,6 +99,9 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
             bitmapCanvas = new Canvas(canvasBitmap);
         }
         frontRenderer = new CanvasFrontBufferedRenderer<>(this, rendererCallbacks);
+
+        // Ensure focus when the surface is ready
+        requestFocus();
     }
 
     @Override
@@ -186,7 +189,13 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        // Request focus on any touch to ensure we catch hardware keys
+        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            requestFocus();
+        }
+
         if (event.getToolType(event.getActionIndex()) != MotionEvent.TOOL_TYPE_STYLUS) return true;
+
         switch (toolManager.getCurrentToolType()) {
             case PEN:    handlePenTouch(event);    break;
             case ERASER: handleEraserTouch(event); break;

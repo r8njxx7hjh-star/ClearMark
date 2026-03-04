@@ -1,5 +1,6 @@
 [versions]
-agp = "9.0.1"
+agp = "8.6.0"
+kotlin = "2.0.0"
 junit = "4.13.2"
 junitVersion = "1.1.5"
 espressoCore = "3.5.1"
@@ -7,6 +8,8 @@ appcompat = "1.6.1"
 material = "1.10.0"
 constraintlayout = "2.2.1"
 motionprediction = "1.0.0-beta01"
+uiToolingPreview = "1.10.4"
+uiTooling = "1.10.4"
 
 [libraries]
 junit = { group = "junit", name = "junit", version.ref = "junit" }
@@ -16,7 +19,10 @@ appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "a
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
 motion-prediction = { group = "androidx.input", name = "input-motionprediction", version.ref = "motionprediction" }
+ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview", version.ref = "uiToolingPreview" }
+ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling", version.ref = "uiTooling" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
