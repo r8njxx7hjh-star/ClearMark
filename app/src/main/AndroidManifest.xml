@@ -11,7 +11,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:hardwareAccelerated="true"
-        android:theme="@style/Theme.DrawingApp"
+        android:theme="@style/Theme.ZeroMark"
         tools:ignore="ExtraText">
 
         <activity android:name=".MainActivity"
