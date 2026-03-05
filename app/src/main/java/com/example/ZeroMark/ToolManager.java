@@ -1,11 +1,11 @@
-package com.example.drawingapp;
+package com.example.ZeroMark;
 
 import android.graphics.Color;
 
-import com.example.drawingapp.tools.Eraser;
-import com.example.drawingapp.tools.Highlighter;
-import com.example.drawingapp.tools.Pen;
-import com.example.drawingapp.tools.Shape;
+import com.example.ZeroMark.tools.Eraser;
+import com.example.ZeroMark.tools.Highlighter;
+import com.example.ZeroMark.tools.Pen;
+import com.example.ZeroMark.tools.Shape;
 
 import java.util.ArrayList;
 import java.util.List;

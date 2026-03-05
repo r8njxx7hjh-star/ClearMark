@@ -1,4 +1,4 @@
-package com.example.drawingapp;
+package com.example.ZeroMark;
 
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.Collection;
@@ -19,8 +19,8 @@ import android.view.SurfaceView;
 import androidx.annotation.NonNull;
 import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer;
 
-import com.example.drawingapp.tools.Eraser;
-import com.example.drawingapp.tools.Pen;
+import com.example.ZeroMark.tools.Eraser;
+import com.example.ZeroMark.tools.Pen;
 
 import java.util.ArrayDeque;
 import java.util.Deque;

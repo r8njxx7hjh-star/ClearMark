@@ -1,4 +1,4 @@
-package com.example.drawingapp.experiments;
+package com.example.ZeroMark.experiments;
 
 import android.content.Context;
 import android.graphics.Canvas;

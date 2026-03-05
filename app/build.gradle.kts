@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.drawingapp"
+    namespace = "com.example.ZeroMark"
     compileSdk = 35
 
     defaultConfig {

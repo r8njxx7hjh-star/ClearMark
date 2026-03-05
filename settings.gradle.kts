@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "DrawingApp"
+rootProject.name = "ZeroMark"
 include(":app")

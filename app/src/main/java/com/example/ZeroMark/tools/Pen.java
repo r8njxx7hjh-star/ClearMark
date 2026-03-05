@@ -1,12 +1,14 @@
-package com.example.drawingapp.tools;
+package com.example.ZeroMark.tools;
 
-public class Eraser {
+public class Pen {
     float width, smoothing, pressureSensitivity;
+    int color;
 
-    public Eraser(float width, float smoothing, float pressureSensitivity) {
+    public Pen(float width, float smoothing, float pressureSensitivity, int color) {
         this.width = width;
         this.smoothing = smoothing;
         this.pressureSensitivity = pressureSensitivity;
+        this.color = color;
     }
 
     public float getWidth() {
@@ -31,5 +33,13 @@ public class Eraser {
 
     public void setPressureSensitivity(float pressureSensitivity) {
         this.pressureSensitivity = pressureSensitivity;
+    }
+
+    public int getColor() {
+        return color;
+    }
+
+    public void setColor(int color) {
+        this.color = color;
     }
 }

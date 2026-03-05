@@ -1,7 +1,4 @@
-package com.example.drawingapp;
-
-import android.graphics.Color;
-import android.graphics.Paint;
+package com.example.ZeroMark;
 
 public class Brush {
     private float brushWidth;

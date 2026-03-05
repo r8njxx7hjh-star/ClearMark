@@ -1,10 +1,10 @@
-package com.example.drawingapp
+package com.example.ZeroMark
 
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.WindowCompat
-import com.example.drawingapp.ui.DrawingScreen
+import com.example.ZeroMark.ui.DrawingScreen
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 

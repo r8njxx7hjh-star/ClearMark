@@ -1,4 +1,4 @@
-package com.example.drawingapp;
+package com.example.ZeroMark;
 
 import android.graphics.PointF;
 

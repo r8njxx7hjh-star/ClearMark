@@ -1,6 +1,4 @@
-package com.example.drawingapp.tools;
-
-import android.graphics.Color;
+package com.example.ZeroMark.tools;
 
 public class Highlighter {
     float width, smoothing;

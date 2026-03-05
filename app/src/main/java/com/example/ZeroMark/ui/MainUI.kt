@@ -1,4 +1,4 @@
-package com.example.drawingapp.ui
+package com.example.ZeroMark.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -11,14 +11,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.example.drawingapp.R
-import com.example.drawingapp.ToolManager
-import com.example.drawingapp.FastDrawingView
-import com.example.drawingapp.CanvasOverlay
+import com.example.ZeroMark.ToolManager
+import com.example.ZeroMark.FastDrawingView
+import com.example.ZeroMark.CanvasOverlay
+import com.example.ZeroMark.R
 
 // ── Vertical slider ───────────────────────────────────────────────────────────
 @OptIn(ExperimentalMaterial3Api::class)
@@ -31,7 +32,7 @@ fun AssetVerticalSlider(
     val trackWidth = 275.dp
     val trackHeight = 40.dp
     val trackThickness = 6.dp
-    val trackCornerRadius = 2.dp  // ← tweak this to adjust rounding
+    val trackCornerRadius = 2.dp
 
     Slider(
         value = value,
@@ -42,9 +43,16 @@ fun AssetVerticalSlider(
             .requiredWidth(trackWidth),
         thumb = {
             Image(
-                painter = painterResource(R.drawable.slider_thumb),
+                painter = painterResource(id = R.drawable.slider_thumb),
                 contentDescription = null,
-                modifier = Modifier.size(30.dp)
+                contentScale = ContentScale.Fit,
+                modifier = Modifier
+                    .size(31.dp)
+                    .graphicsLayer { 
+                        // The Slider is rotated 270 degrees. 
+                        // We rotate the thumb 90 degrees to make it appear upright.
+                        rotationZ = 90f 
+                    }
             )
         },
         track = { sliderState ->
@@ -65,7 +73,7 @@ fun AssetVerticalSlider(
                         .background(Color(0xFFE0F3FF))
                 )
 
-                // Filled track — grows from left
+                // Filled track
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()

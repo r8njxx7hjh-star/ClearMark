@@ -1,6 +1,4 @@
-package com.example.drawingapp.tools;
-
-import android.graphics.Color;
+package com.example.ZeroMark.tools;
 
 public class Shape {
     public enum ShapeType { LINE, RECTANGLE, ELLIPSE}
