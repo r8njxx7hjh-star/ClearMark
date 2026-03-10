@@ -44,6 +44,7 @@ android {
 
 dependencies {
     // ── Existing ──────────────────────────────────────────────────
+    implementation(libs.core.ktx)
     implementation(libs.appcompat)
     implementation(libs.constraintlayout)
     implementation(libs.motion.prediction)

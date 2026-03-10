@@ -4,8 +4,9 @@ kotlin = "2.0.0"
 junit = "4.13.2"
 junitVersion = "1.1.5"
 espressoCore = "3.5.1"
-appcompat = "1.6.1"
-material = "1.10.0"
+appcompat = "1.7.1"
+coreKtx = "1.13.1"
+material = "1.12.0"
 constraintlayout = "2.2.1"
 motionprediction = "1.0.0-beta01"
 uiToolingPreview = "1.10.4"
@@ -16,6 +17,7 @@ junit = { group = "junit", name = "junit", version.ref = "junit" }
 ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
 motion-prediction = { group = "androidx.input", name = "input-motionprediction", version.ref = "motionprediction" }

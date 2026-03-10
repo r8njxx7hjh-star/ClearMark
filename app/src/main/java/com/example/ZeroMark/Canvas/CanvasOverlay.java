@@ -1,10 +1,12 @@
-package com.example.ZeroMark;
+package com.example.ZeroMark.Canvas;
 
 import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.view.View;
+
+import com.example.ZeroMark.Brushes.ToolManager;
 
 public class CanvasOverlay extends View {
 
@@ -65,7 +67,7 @@ public class CanvasOverlay extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
         if (eraserVisible) {
-            float r = FastDrawingView.calculateEraserStrokeWidth(cursorPressure, ToolManager.getInstance().getActiveEraser());
+            float r = BrushResolver.resolveSize(ToolManager.getInstance().getActiveBrush(), cursorPressure);
             canvas.drawCircle(cursorX, cursorY, r / 2f, cursorPaint);
         }
         if (linePreviewVisible) {

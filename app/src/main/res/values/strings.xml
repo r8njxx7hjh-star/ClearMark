@@ -1,3 +1,6 @@
 <resources>
     <string name="app_name">ZeroMark</string>
+    <string name="canvas_title">Canvas</string>
+    <string name="brush_size_label">Brush Size</string>
+    <string name="opacity_label">Opacity</string>
 </resources>
