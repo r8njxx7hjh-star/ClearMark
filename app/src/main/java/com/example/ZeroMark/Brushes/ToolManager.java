@@ -3,13 +3,26 @@ package com.example.ZeroMark.Brushes;
 import android.graphics.Color;
 
 import com.example.ZeroMark.tools.Shape;
-import com.example.ZeroMark.Brushes.*;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public class ToolManager {
-    private static ToolManager instance;
+
+    // ─── Thread-safe singleton (initialization-on-demand holder) ──
+    // The JVM guarantees that Holder.INSTANCE is initialized exactly once,
+    // lazily, without any explicit synchronization needed at call sites.
+    // This replaces the previous unsynchronized "if (instance == null)" check,
+    // which could produce two instances if called from multiple threads.
+    private static final class Holder {
+        static final ToolManager INSTANCE = new ToolManager();
+    }
+
+    public static ToolManager getInstance() {
+        return Holder.INSTANCE;
+    }
+
+    // ─────────────────────────────────────────────────────────────
 
     public enum ToolType { PEN, ERASER, HIGHLIGHTER, SHAPE, NONE }
 
@@ -24,21 +37,24 @@ public class ToolManager {
         brushList.add(BrushDescriptor.inkPen());
         brushList.add(BrushDescriptor.softPencil());
 
-        // Eraser is just a BrushDescriptor with CLEAR blend mode
-        brushList.add(new BrushDescriptor.Builder("Eraser")
+        // Eraser is just a BrushDescriptor with CLEAR blend mode.
+        // BUG FIX: opacity must be set to 100. The Builder default for int
+        // fields is 0, so without .opacity(100) BrushResolver.resolveOpacity
+        // returns 0.0f → the eraser layer has alpha = 0 → completely invisible
+        // in both the multi-buffer (drawFullCanvas saveLayer) and commitStroke
+        // paths. Setting opacity to 100 makes the eraser fully opaque.
+        eraserList.add(new BrushDescriptor.Builder("Eraser")
                 .size(25)
                 .sizeRange(50, 150)
                 .pressureControlsSize(true)
+                .opacity(100)                               // ← FIX: was missing, defaulted to 0
+                .opacityRange(100, 100)                     // eraser is always full-strength
                 .smoothing(50)
-                .blendMode(BrushDescriptor.BlendMode.CLEAR)  // ← this is what makes it an eraser
+                .spacing(10)
+                .blendMode(BrushDescriptor.BlendMode.CLEAR)
                 .build());
 
         shapeList.add(new Shape(Color.BLACK, Shape.ShapeType.RECTANGLE));
-    }
-
-    public static ToolManager getInstance() {
-        if (instance == null) instance = new ToolManager();
-        return instance;
     }
 
     // ─── Active tool access ───────────────────────────────────────

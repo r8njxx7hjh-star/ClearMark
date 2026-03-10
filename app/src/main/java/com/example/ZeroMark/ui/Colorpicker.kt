@@ -112,7 +112,11 @@ fun HueBar(hue: Float, onHueChange: (Float) -> Unit, modifier: Modifier = Modifi
 fun ColorPickerPopup(
     initialColor: Color?,
     onColorChanged: (Color) -> Unit,
-    onDismissRequest: () -> Unit
+    onDismissRequest: () -> Unit,
+    // Opacity is owned by DrawingScreen and shared with the sidebar slider.
+    // Pass it in so both controls always show the same value.
+    externalAlpha: Float = initialColor?.alpha ?: 1f,
+    onAlphaChange: (Float) -> Unit = {}
 ) {
     val originalColor = remember { initialColor ?: Color.Black }
     val initialHsv = remember {
@@ -123,16 +127,17 @@ fun ColorPickerPopup(
     var hue           by remember { mutableFloatStateOf(initialHsv[0]) }
     var saturation    by remember { mutableFloatStateOf(initialHsv[1]) }
     var brightness    by remember { mutableFloatStateOf(initialHsv[2]) }
-    var alpha         by remember { mutableFloatStateOf(initialColor?.alpha ?: 1f) }
     var hasInteracted by remember { mutableStateOf(initialColor != null) }
-    val currentColor   = Color.hsv(hue, saturation, brightness, alpha)
+    // Use externalAlpha as the source of truth — no local alpha state
+    val alpha = externalAlpha
+    val currentColor  = Color.hsv(hue, saturation, brightness, alpha)
 
     LaunchedEffect(initialColor) {
         initialColor?.let {
             if (it.toArgb() != currentColor.toArgb()) {
                 val arr = FloatArray(3)
                 android.graphics.Color.colorToHSV(it.toArgb(), arr)
-                hue = arr[0]; saturation = arr[1]; brightness = arr[2]; alpha = it.alpha
+                hue = arr[0]; saturation = arr[1]; brightness = arr[2]
             }
         }
     }
@@ -183,7 +188,7 @@ fun ColorPickerPopup(
                         AssetVerticalSlider(
                             value             = alpha,
                             onValueChange     = { a ->
-                                alpha = a
+                                onAlphaChange(a)
                                 if (hasInteracted) onColorChanged(Color.hsv(hue, saturation, brightness, a))
                             },
                             valueRange        = 0f..1f,
@@ -229,7 +234,8 @@ fun ColorPickerPopup(
                                 val arr = FloatArray(3)
                                 android.graphics.Color.colorToHSV(originalColor.toArgb(), arr)
                                 if (arr[2] > 0f) { hue = arr[0]; saturation = arr[1] }
-                                brightness = arr[2]; alpha = originalColor.alpha
+                                brightness = arr[2]
+                                onAlphaChange(originalColor.alpha)
                                 hasInteracted = true; onColorChanged(originalColor)
                             }
                     )

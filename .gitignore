@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Source zips — never commit these; they duplicate the repo itself
+*.zip

@@ -49,7 +49,9 @@ fun ColorGridPopup(
     onDeleteColor: (Int) -> Unit,
     onReorderColors: (List<Color>) -> Unit,
     onDismiss: () -> Unit,
-    popupOffset: IntOffset = IntOffset.Zero
+    popupOffset: IntOffset = IntOffset.Zero,
+    currentOpacity: Float = 1f,
+    onOpacityChange: (Float) -> Unit = {}
 ) {
     val density  = LocalDensity.current
     val swatchPx = with(density) { SWATCH.toPx() }
@@ -214,7 +216,9 @@ fun ColorGridPopup(
                     onColorSelected(newIdx)
                 }
             },
-            onDismissRequest = { showColorPicker = false; editingIndex = -1 }
+            onDismissRequest = { showColorPicker = false; editingIndex = -1 },
+            externalAlpha    = currentOpacity,
+            onAlphaChange    = onOpacityChange
         )
     }
 }

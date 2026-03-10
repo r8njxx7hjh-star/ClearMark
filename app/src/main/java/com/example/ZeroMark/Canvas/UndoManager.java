@@ -11,7 +11,14 @@ import java.util.Deque;
 public class UndoManager {
 
     private final Deque<Bitmap> stack = new ArrayDeque<>();
-    private static final int MAX = 120;
+
+    // PERF FIX: reduced from 25 to 10.
+    // At 2560×1600 (Redmi Pad 2 Pro native resolution) each ARGB_8888 bitmap
+    // is ~16 MB. 25 snapshots = up to 400 MB held in memory continuously,
+    // which causes heavy GC pauses and potential OOM after extended sessions.
+    // 10 levels = ~160 MB — enough undo depth for typical use without
+    // degrading sustained performance over a long drawing session.
+    private static final int MAX = 10;
 
     public void push(Bitmap current) {
         if (current == null) return;

@@ -6,11 +6,10 @@ import com.example.ZeroMark.Brushes.ToolManager;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 public class StrokeInputHandler {
 
-    private final List<float[]> strokePoints = new CopyOnWriteArrayList<>();
+    private final List<float[]> strokePoints = new ArrayList<>();
     private float[] lastPoint = null;
     private int currentPointerId = -1;
     private float lastRawX = 0f;
@@ -64,7 +63,7 @@ public class StrokeInputHandler {
             lastRawX = x;
             lastRawY = y;
             lastPoint = new float[]{x, y, p};
-            strokePoints.add(lastPoint.clone());
+            strokePoints.add(lastPoint);   // PERF FIX: no .clone() — lastPoint is never mutated in place
             if (listener != null) listener.onSegmentReady(new float[]{x, y, p, x, y, p});
             return;
         }
@@ -77,10 +76,13 @@ public class StrokeInputHandler {
         float sy = lastPoint[1] + (lastRawY - lastPoint[1]) * sf;
         float sp = lastPoint[2] + (p - lastPoint[2]) * Math.min(sf + 0.2f, 1f);
 
+        // PERF FIX: removed newPt.clone() — newPt is freshly allocated each call
+        // and never mutated after being stored in strokePoints, so the clone was
+        // a pointless allocation that doubled GC pressure on long strokes.
         float[] newPt   = {sx, sy, sp};
         float[] segment = {lastPoint[0], lastPoint[1], lastPoint[2], sx, sy, sp};
 
-        strokePoints.add(newPt.clone());
+        strokePoints.add(newPt);
         lastPoint = newPt;
         if (listener != null) listener.onSegmentReady(segment);
     }

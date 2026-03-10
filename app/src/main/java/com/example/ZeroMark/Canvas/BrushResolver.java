@@ -27,10 +27,10 @@ public class BrushResolver {
     public static float evaluateCurve(float[] curve, float input) {
         float cp1x = curve[0], cp1y = curve[1];
         float cp2x = curve[2], cp2y = curve[3];
-        float t = input;
+        float t = input; // good initial guess
         for (int i = 0; i < 16; i++) {
             float x  =  3*cp1x*t*(1-t)*(1-t) + 3*cp2x*t*t*(1-t) + t*t*t;
-            float dx =  3*cp1x*(1-t)*(1-3*t) + 3*cp2x*t*(3*t-2)  + 3*t*t;
+            float dx =  3*cp1x*(1-t)*(1-3*t) + 3*cp2x*t*(2-3*t) + 3*t*t; // ← was (3*t-2), must be (2-3*t)
             if (Math.abs(dx) < 1e-6f) break;
             t -= (x - input) / dx;
             t  = Math.max(0f, Math.min(1f, t));

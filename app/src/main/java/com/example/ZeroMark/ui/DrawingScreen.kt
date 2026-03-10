@@ -17,14 +17,15 @@ fun DrawingScreen() {
     var selectedTool       by remember { mutableStateOf(ToolManager.ToolType.PEN) }
     var brushSize          by remember { mutableFloatStateOf(40f) }
     var opacity            by remember { mutableFloatStateOf(40f) }
-    var selectedColorIndex by remember { mutableIntStateOf(1) }
+    var selectedColorIndex by remember { mutableIntStateOf(0) }
     var colors by remember {
-        mutableStateOf(listOf(Color.Black, Color.White, Color.Red, Color.Blue, Color.Green, Color.Yellow))
+        mutableStateOf(listOf(Color.Black, Color.Red, Color.Blue, Color.Green, Color.Yellow))
     }
     val selectedColor = colors.getOrElse(selectedColorIndex) { Color.Black }
 
     // Push initial values into ToolManager once on first composition
     LaunchedEffect(Unit) {
+        ToolManager.getInstance().setCurrentTool(ToolManager.ToolType.PEN, 0)
         val brush = ToolManager.getInstance().getActiveBrush()
         brush?.let {
             it.setSize(brushSize.toInt())
@@ -75,6 +76,12 @@ fun DrawingScreen() {
                 val currentColor   = colors.getOrNull(selectedColorIndex)
                 colors             = reordered
                 selectedColorIndex = if (currentColor != null) reordered.indexOf(currentColor).coerceAtLeast(0) else 0
+            },
+            // Single source of truth: opacity (0–100) → alpha (0–1) for the picker
+            currentOpacity  = opacity / 100f,
+            onOpacityChange = { alpha ->
+                opacity = alpha * 100f
+                ToolManager.getInstance().getActiveBrush()?.setOpacity(opacity.toInt())
             }
         )
 

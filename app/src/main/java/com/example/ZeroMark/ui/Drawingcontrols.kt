@@ -38,6 +38,8 @@ fun DrawingToolbar(
     onAddColor: (Color) -> Unit,
     onDeleteColor: (Int) -> Unit,
     onReorderColors: (List<Color>) -> Unit,
+    currentOpacity: Float = 1f,
+    onOpacityChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showColorGrid   by remember { mutableStateOf(false) }
@@ -113,7 +115,9 @@ fun DrawingToolbar(
                 onDeleteColor      = onDeleteColor,
                 onReorderColors    = onReorderColors,
                 onDismiss          = { showColorGrid = false },
-                popupOffset        = IntOffset(x = -16, y = toolbarBottomPx)
+                popupOffset        = IntOffset(x = -16, y = toolbarBottomPx),
+                currentOpacity     = currentOpacity,
+                onOpacityChange    = onOpacityChange
             )
         }
     }
