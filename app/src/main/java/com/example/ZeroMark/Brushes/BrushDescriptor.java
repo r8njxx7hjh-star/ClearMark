@@ -88,7 +88,7 @@ public class BrushDescriptor {
 
         b.smoothing               = 100; // maximum smoothing — curve extended so sf@100 = 0.033 (50% more lag than the old sf@100 = 0.05)
 
-        b.spacing                 = 1; //does work but not how it should, only works when drawing super fast and the spacing is inconsistant on the brush. I tried 5 and 4000 5 is good for normal strokes and 4000 is required for me to realy see the difference
+        b.spacing                 = 4; //does work but not how it should, only works when drawing super fast and the spacing is inconsistant on the brush. I tried 5 and 4000 5 is good for normal strokes and 4000 is required for me to realy see the difference
         b.shapeTipAssetId         = null;
         b.grainAssetId            = null;
 

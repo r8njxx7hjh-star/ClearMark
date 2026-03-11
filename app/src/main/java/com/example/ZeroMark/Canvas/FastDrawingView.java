@@ -114,6 +114,9 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                 if (toolManager.getCurrentToolType() == ToolManager.ToolType.ERASER) {
                     if (frontRenderer != null) frontRenderer.commit();
                 } else {
+                    // Clear the tether before commit so the front-buffer callbacks
+                    // that fire after commit() do not re-draw a stale tether segment.
+                    renderer.clearTether();
                     renderer.commitStroke(bitmapCanvas, points, toolManager.getActiveBrush());
 
                     // Signal that the pen is up BEFORE calling commit().
@@ -273,6 +276,9 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                         Math.max(getWidth(), 1),
                         Math.max(getHeight(), 1)
                 );
+                // Tell the overlay the front buffer owns the tether so it
+                // does NOT draw a duplicate at its own opacity.
+                if (canvasOverlay != null) canvasOverlay.setFrontBufferOwnsTether(true);
                 inputHandler.onDown(event);
                 break;
             }
@@ -282,7 +288,10 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
+                // Flush smoothing lag first (emits remaining segments + bakes them),
+                // THEN hide the tether — so the flush animation plays fully.
                 inputHandler.onUp();
+                renderer.clearTether();
                 if (canvasOverlay != null) canvasOverlay.hideTether();
                 break;
             }
@@ -339,7 +348,10 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
 
     // ─── Overlay helpers ──────────────────────────────────────────
 
-    public void setCanvasOverlay(CanvasOverlay overlay) { this.canvasOverlay = overlay; }
+    public void setCanvasOverlay(CanvasOverlay overlay) {
+        this.canvasOverlay = overlay;
+        overlay.setStrokeRenderer(renderer);
+    }
 
     private void overlayUpdateCursor(float x, float y, float pressure) {
         if (canvasOverlay != null) canvasOverlay.updateCursor(x, y, pressure);

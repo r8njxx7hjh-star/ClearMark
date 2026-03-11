@@ -73,34 +73,96 @@ public class StrokeRenderer {
         // so stale content never leaks into a subsequent stroke.
     }
 
+    // ─── Tether state (ghost tip → raw touch) ───────────────────
+    // Stored so drawSegmentFrontBuffer can include the tether in the same
+    // composite layer as liveBitmap. This prevents opacity doubling at the
+    // seam: liveBitmap and the tether both get brush.opacity applied once,
+    // together, inside a single saveLayer — identical to how commitStroke works.
+    private float tetherAx, tetherAy, tetherAp;
+    private float tetherBx, tetherBy, tetherBp;
+    private boolean hasTether = false;
+
+    /** Called each frame with the current ghost-tip and raw-touch positions. */
+    public void setTether(float ax, float ay, float ap,
+                          float bx, float by, float bp) {
+        tetherAx = ax; tetherAy = ay; tetherAp = ap;
+        tetherBx = bx; tetherBy = by; tetherBp = bp;
+        hasTether = true;
+    }
+
+    /** Called on pen-lift so the tether is no longer drawn. */
+    public void clearTether() {
+        hasTether = false;
+    }
+
     // ─── Front buffer (live, per segment) ────────────────────────
     // data = float[9]: [0..5] smoothed segment, [6..8] raw touch tip (x, y, pressure)
     //
     // Step 1: accumulate the smoothed segment onto liveBitmap (persistent)
-    // Step 2: composite liveBitmap onto the front buffer
-    // Step 3: draw a straight "tether" segment directly on the front buffer
-    //         from the smoothed tip [3,4,5] to the raw touch position [6,7,8]
+    // Step 2: inside a single saveLayer at brush opacity:
+    //           a) composite liveBitmap (smoothed ink so far)
+    //           b) draw the tether (ghost tip → raw touch) on top
     //
-    // The tether uses the same brush so it looks identical to the stroke — no
-    // visible seam. It gets redrawn every frame and replaced by the real smoothed
-    // curve as it catches up, giving the illusion of a zero-lag stroke while the
-    // committed path is fully smoothed.
+    // By compositing both inside one saveLayer, the tether and the smoothed
+    // stroke share a single opacity pass — no double-opacity at their junction
+    // even when brush.opacity is < 1. The result is one seamless stroke.
 
     public void drawSegmentFrontBuffer(Canvas canvas, float[] data, BrushDescriptor brush) {
         if (liveBitmap == null) return;
         if (data.length != 9) return;
 
         // Incrementally accumulate only the new smoothed segment onto liveBitmap.
-        // Never clear the front buffer — CanvasFrontBufferedRenderer is additive.
-        // The tether (smoothed tip → raw touch) is rendered separately in CanvasOverlay
-        // so it can be replaced each frame without disturbing the front buffer.
         spacingCarry = renderSegmentFlat(data[0], data[1], data[2],
                 data[3], data[4], data[5],
                 liveCanvas, brush, spacingCarry);
 
+        // Update tether from the latest data packet.
+        tetherAx = data[3]; tetherAy = data[4]; tetherAp = data[5];
+        tetherBx = data[6]; tetherBy = data[7]; tetherBp = data[8];
+        hasTether = true;
+
+        // Composite liveBitmap + tether together inside one saveLayer at brush opacity.
+        // This is the key fix: both parts of the visible stroke (smoothed + tether)
+        // are treated as a single layer — brush.opacity is applied exactly once,
+        // matching how the committed stroke looks. No seam, no double-opacity.
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
-        livePaint.setAlpha(255);
-        canvas.drawBitmap(liveBitmap, 0, 0, livePaint);
+
+        final boolean isClear = brush.blendMode == BrushDescriptor.BlendMode.CLEAR;
+        if (isClear) {
+            // Eraser: draw liveBitmap at full alpha, then tether at full alpha.
+            canvas.drawBitmap(liveBitmap, 0, 0, bitmapPaint);
+            if (hasTether) {
+                float dx = tetherBx - tetherAx;
+                float dy = tetherBy - tetherAy;
+                if (dx * dx + dy * dy >= 1f) {
+                    renderSegmentFlat(tetherAx, tetherAy, tetherAp,
+                            tetherBx, tetherBy, tetherBp,
+                            canvas, brush, spacingCarry);
+                }
+            }
+        } else {
+            // Normal brush: saveLayer at layer-alpha so the whole visible stroke
+            // (liveBitmap + tether) composites at the correct brush opacity.
+            layerPaint.setAlpha((int)(BrushResolver.resolveLayerAlpha(brush) * 255));
+            canvas.saveLayer(null, layerPaint);
+
+            // Draw liveBitmap at full alpha — dabs already have resolveDabAlpha baked in.
+            canvas.drawBitmap(liveBitmap, 0, 0, bitmapPaint);
+
+            // Draw tether (ghost tip → raw touch) at full alpha on top.
+            // Together with liveBitmap they form one continuous stroke.
+            if (hasTether) {
+                float dx = tetherBx - tetherAx;
+                float dy = tetherBy - tetherAy;
+                if (dx * dx + dy * dy >= 1f) {
+                    renderSegmentFlat(tetherAx, tetherAy, tetherAp,
+                            tetherBx, tetherBy, tetherBp,
+                            canvas, brush, spacingCarry);
+                }
+            }
+
+            canvas.restore();
+        }
     }
 
     // ─── Multi buffer (full stroke replay) ───────────────────────
@@ -125,9 +187,9 @@ public class StrokeRenderer {
             return;
         }
 
-        // Per-dab opacity is baked into each stamp — saveLayer must be full alpha
-        // to avoid multiplying opacity a second time across the whole stroke.
-        layerPaint.setAlpha(255);
+        // saveLayer at layer opacity so the replayed dabs (using resolveDabAlpha)
+        // composite onto the canvas at the correct brush opacity.
+        layerPaint.setAlpha((int)(BrushResolver.resolveLayerAlpha(brush) * 255));
         canvas.saveLayer(null, layerPaint);
 
         float c = 0f;
@@ -183,14 +245,15 @@ public class StrokeRenderer {
                         pt[0],   pt[1],   pt[2],
                         scratchCanvas, brush, commitSpacingCarry);
             } else {
-                float oa = BrushResolver.resolveOpacity(brush, pt[2]);
+                float oa = BrushResolver.resolveDabAlpha(brush, pt[2]);
                 stampCircleWithAlpha(scratchCanvas, pt[0], pt[1],
                         BrushResolver.resolveSize(brush, pt[2]) / 2f, oa, brush);
             }
             prev = pt;
         }
 
-        compositePaint.setAlpha(255);
+        // Composite scratch at layer opacity — this is where brush.opacity takes effect.
+        compositePaint.setAlpha((int)(BrushResolver.resolveLayerAlpha(brush) * 255));
         bitmapCanvas.drawBitmap(scratchBitmap, 0, 0, compositePaint);
         spacingCarry = 0f; // live carry reset — next stroke starts fresh
     }
@@ -231,10 +294,30 @@ public class StrokeRenderer {
     private float spacingCarry       = 0f;
     private float commitSpacingCarry = 0f;
 
-    /** Exposes the live-stroke carry so CanvasOverlay can start the tether from the
-     *  exact same position — tether dabs land where the committed stroke will extend,
-     *  eliminating the visual shift on pen-lift. */
+    /** Exposes the live-stroke carry so the preview segment starts from the exact
+     *  position the committed stroke will next place a dab — dab alignment is
+     *  therefore identical between the preview and the final committed ink. */
     public float getSpacingCarry() { return spacingCarry; }
+
+    // ─── Preview segment (Procreate-style StreamLine) ─────────────
+    // Renders the gap from the smoothed ghost tip to the raw finger position
+    // directly onto the provided canvas (the CanvasOverlay hardware canvas).
+    // Uses the same renderSegmentFlat + resolveDabAlpha as the committed stroke
+    // so it looks pixel-identical — the user sees a seamless continuation of
+    // their ink that reaches all the way to the finger, with no visible lag.
+    //
+    // carry is passed in (= current spacingCarry) so the first preview dab lands
+    // exactly where the committed stroke will place its next dab when the ghost
+    // catches up. This is what makes the transition invisible on pen-lift.
+    //
+    // NOTE: this method does NOT mutate spacingCarry — the preview is read-only
+    // from the carry perspective; only the committed path advances it.
+    public void drawPreviewSegment(Canvas canvas,
+                                   float ax, float ay, float ap,
+                                   float bx, float by, float bp,
+                                   BrushDescriptor brush) {
+        renderSegmentFlat(ax, ay, ap, bx, by, bp, canvas, brush, spacingCarry);
+    }
 
     // ─── Core splat loop ──────────────────────────────────────────
     // carry: how far into the current step interval we already are.
@@ -259,7 +342,7 @@ public class StrokeRenderer {
         // Dot / tap — no length to walk, stamp once if this is the very first dab
         if (lenSq < 0.01f) {
             if (carry == 0f) {
-                float oa = BrushResolver.resolveOpacity(brush, ap);
+                float oa = BrushResolver.resolveDabAlpha(brush, ap);
                 stampCircleWithAlpha(target, ax, ay, wa / 2f, oa, brush);
             }
             return carry;
@@ -281,7 +364,7 @@ public class StrokeRenderer {
             float y        = ay + dy * t;
             float radius   = (wa + (wb - wa) * t) / 2f;
             float pressure = ap + (bp - ap) * t;
-            float alpha    = BrushResolver.resolveOpacity(brush, pressure);
+            float alpha    = BrushResolver.resolveDabAlpha(brush, pressure);
             stampCircleWithAlpha(target, x, y, radius, alpha, brush);
             distAlongSeg  += stepPx;
         }

@@ -24,6 +24,32 @@ public class BrushResolver {
     }
 
     /**
+     * Per-dab alpha used INSIDE a stroke layer (liveBitmap / scratchBitmap).
+     * Intentionally excludes brush.opacity — that is applied once at composite
+     * time via resolveLayerAlpha(). This prevents overlapping dabs within a
+     * single stroke from stacking opacity. Drawing over your own line still
+     * builds up because each committed stroke adds a fresh layer at layer-alpha.
+     * Only pressure/range variation is included so pressure-sensitive opacity
+     * still shows within the stroke.
+     */
+    public static float resolveDabAlpha(BrushDescriptor b, float pressure) {
+        float t        = b.pressureControlsOpacity
+                ? evaluateCurve(b.opacityPressureCurve, pressure)
+                : 1f;
+        float minAlpha = b.opacityMin / 100f;
+        float maxAlpha = b.opacityMax / 100f;
+        return minAlpha + (maxAlpha - minAlpha) * t;
+    }
+
+    /**
+     * The alpha at which the whole stroke layer composites onto the canvas.
+     * Apply to livePaint / compositePaint — never per-dab.
+     */
+    public static float resolveLayerAlpha(BrushDescriptor b) {
+        return b.opacity / 100f;
+    }
+
+    /**
      * Maps brush.spacing (1–100) to a diameter multiplier (0.10–2.50).
      *   1   → 0.10  (heavily overlapping dabs — solid stroke)
      *   50  → ~1.30 (slightly separated)
