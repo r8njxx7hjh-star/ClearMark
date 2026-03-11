@@ -75,11 +75,14 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
         inputHandler.setListener(new StrokeInputHandler.Listener() {
 
             @Override
-            public void onSegmentReady(float[] segment) {
+            public void onSegmentReady(float[] data) {
+                // data = float[9]: smoothSeg(6) + rawTip(3)
                 if (frontRenderer == null) return;
 
                 if (toolManager.getCurrentToolType() == ToolManager.ToolType.ERASER) {
-                    renderer.applySegmentDirect(bitmapCanvas, segment, toolManager.getActiveBrush());
+                    // Eraser only needs the smoothed segment — extract first 6 floats
+                    float[] seg = new float[]{data[0], data[1], data[2], data[3], data[4], data[5]};
+                    renderer.applySegmentDirect(bitmapCanvas, seg, toolManager.getActiveBrush());
                     if (!eraserCommitPending) {
                         eraserCommitPending = true;
                         post(() -> {
@@ -88,7 +91,21 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                         });
                     }
                 } else {
-                    frontRenderer.renderFrontBufferedLayer(segment);
+                    // Push smoothed segment to the front buffer (incremental, no flicker)
+                    frontRenderer.renderFrontBufferedLayer(data);
+                    // Update the overlay tether:
+                    //   data[0,1]   = previous smoothed point (gives stroke direction for the Bézier)
+                    //   data[3,4,5] = current smoothed tip (tether start)
+                    //   data[6,7,8] = raw touch position  (tether end)
+                    //   getSpacingCarry() ensures tether dabs land where the committed stroke extends,
+                    //                    so there is no visual shift when the pen lifts.
+                    if (canvasOverlay != null) {
+                        canvasOverlay.updateTether(
+                                data[0], data[1],
+                                data[3], data[4], data[5],
+                                data[6], data[7], data[8],
+                                renderer.getSpacingCarry());
+                    }
                 }
             }
 
@@ -183,6 +200,7 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                         return;
                     }
 
+                    // segment = float[9]: smoothSeg[0..5] + rawTip[6..8]
                     renderer.drawSegmentFrontBuffer(
                             canvas,
                             segment,
@@ -265,7 +283,7 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
                 inputHandler.onUp();
-                overlayHideLinePreview();
+                if (canvasOverlay != null) canvasOverlay.hideTether();
                 break;
             }
         }
@@ -329,7 +347,5 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
     private void overlayHideCursor() {
         if (canvasOverlay != null) canvasOverlay.hideCursor();
     }
-    private void overlayHideLinePreview() {
-        if (canvasOverlay != null) canvasOverlay.hideLinePreview();
-    }
+
 }

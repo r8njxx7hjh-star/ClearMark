@@ -23,6 +23,19 @@ public class BrushResolver {
         return base * (minAlpha + (maxAlpha - minAlpha) * t);
     }
 
+    /**
+     * Maps brush.spacing (1–100) to a diameter multiplier (0.10–2.50).
+     *   1   → 0.10  (heavily overlapping dabs — solid stroke)
+     *   50  → ~1.30 (slightly separated)
+     *   100 → 2.50  (2.5 brush-widths between dabs)
+     *
+     * Single source of truth — used by both StrokeRenderer and CanvasOverlay
+     * so the tether preview is always pixel-identical to the committed stroke.
+     */
+    public static float resolveSpacingMultiplier(BrushDescriptor b) {
+        return 0.10f + (b.spacing - 1) / 99.0f * 2.40f;
+    }
+
     // Cubic bezier solver — no Android deps, copy to web JS verbatim
     public static float evaluateCurve(float[] curve, float input) {
         float cp1x = curve[0], cp1y = curve[1];

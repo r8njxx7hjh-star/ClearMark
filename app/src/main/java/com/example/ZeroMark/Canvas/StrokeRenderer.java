@@ -51,6 +51,7 @@ public class StrokeRenderer {
             liveCanvas = new Canvas(liveBitmap);
         }
         liveCanvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
+        spacingCarry = 0f;
     }
 
     public void endLiveStroke() {
@@ -73,31 +74,32 @@ public class StrokeRenderer {
     }
 
     // ─── Front buffer (live, per segment) ────────────────────────
-    // O(1): only stamps the new segment's dabs onto liveBitmap, then
-    // draws ONLY liveBitmap at stroke opacity onto the front buffer canvas.
+    // data = float[9]: [0..5] smoothed segment, [6..8] raw touch tip (x, y, pressure)
     //
-    // NOTE: eraser never calls beginLiveStroke so liveBitmap == null for
-    // eraser strokes. This method returns early — erasing is handled
-    // entirely by the eager frontRenderer.commit() calls in FastDrawingView,
-    // which trigger drawFullCanvas where CLEAR is applied directly.
+    // Step 1: accumulate the smoothed segment onto liveBitmap (persistent)
+    // Step 2: composite liveBitmap onto the front buffer
+    // Step 3: draw a straight "tether" segment directly on the front buffer
+    //         from the smoothed tip [3,4,5] to the raw touch position [6,7,8]
+    //
+    // The tether uses the same brush so it looks identical to the stroke — no
+    // visible seam. It gets redrawn every frame and replaced by the real smoothed
+    // curve as it catches up, giving the illusion of a zero-lag stroke while the
+    // committed path is fully smoothed.
 
-    public void drawSegmentFrontBuffer(Canvas canvas, float[] segment, BrushDescriptor brush) {
-        if (segment.length != 6) return;
+    public void drawSegmentFrontBuffer(Canvas canvas, float[] data, BrushDescriptor brush) {
         if (liveBitmap == null) return;
+        if (data.length != 9) return;
 
-        // Accumulate new segment dabs onto live bitmap at full alpha
-        renderSegmentFlat(segment[0], segment[1], segment[2],
-                          segment[3], segment[4], segment[5],
-                          liveCanvas, brush);
+        // Incrementally accumulate only the new smoothed segment onto liveBitmap.
+        // Never clear the front buffer — CanvasFrontBufferedRenderer is additive.
+        // The tether (smoothed tip → raw touch) is rendered separately in CanvasOverlay
+        // so it can be replaced each frame without disturbing the front buffer.
+        spacingCarry = renderSegmentFlat(data[0], data[1], data[2],
+                data[3], data[4], data[5],
+                liveCanvas, brush, spacingCarry);
 
-        // Clear the front buffer to transparent (not white — the multi-buffer
-        // layer underneath already has the committed content as background)
         canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
-
-        // Composite live stroke at stroke opacity on top
-        float pressure = (segment[2] + segment[5]) / 2f;
-        float alpha = BrushResolver.resolveOpacity(brush, pressure);
-        livePaint.setAlpha((int)(alpha * 255));
+        livePaint.setAlpha(255);
         canvas.drawBitmap(liveBitmap, 0, 0, livePaint);
     }
 
@@ -114,28 +116,25 @@ public class StrokeRenderer {
         final boolean isClear = brush.blendMode == BrushDescriptor.BlendMode.CLEAR;
 
         if (isClear) {
+            float c = 0f;
             for (float[] seg : segments) {
-                renderSegmentFlat(seg[0], seg[1], seg[2],
-                                  seg[3], seg[4], seg[5],
-                                  canvas, brush);
+                c = renderSegmentFlat(seg[0], seg[1], seg[2],
+                        seg[3], seg[4], seg[5],
+                        canvas, brush, c);
             }
             return;
         }
 
-        int size = segments.size(), midIdx = size / 2, i = 0;
-        float midPressure = 0.5f;
-        for (float[] seg : segments) {
-            if (i++ == midIdx) { midPressure = (seg[2] + seg[5]) / 2f; break; }
-        }
-
-        float alpha = BrushResolver.resolveOpacity(brush, midPressure);
-        layerPaint.setAlpha((int)(alpha * 255));
+        // Per-dab opacity is baked into each stamp — saveLayer must be full alpha
+        // to avoid multiplying opacity a second time across the whole stroke.
+        layerPaint.setAlpha(255);
         canvas.saveLayer(null, layerPaint);
 
+        float c = 0f;
         for (float[] seg : segments) {
-            renderSegmentFlat(seg[0], seg[1], seg[2],
-                              seg[3], seg[4], seg[5],
-                              canvas, brush);
+            c = renderSegmentFlat(seg[0], seg[1], seg[2],
+                    seg[3], seg[4], seg[5],
+                    canvas, brush, c);
         }
         canvas.restore();
     }
@@ -147,13 +146,19 @@ public class StrokeRenderer {
 
         final boolean isClear = brush.blendMode == BrushDescriptor.BlendMode.CLEAR;
 
+        // commitSpacingCarry always starts at 0 — the commit is a clean independent
+        // replay of the stroke, not a continuation of the live carry. This is what
+        // prevents dab positions shifting when the stroke is finalised.
+        commitSpacingCarry = 0f;
+
         if (isClear) {
             float[] prev = null;
             for (float[] pt : points) {
                 if (prev != null) {
-                    renderSegmentFlat(prev[0], prev[1], prev[2],
-                                      pt[0],   pt[1],   pt[2],
-                                      bitmapCanvas, brush);
+                    commitSpacingCarry = renderSegmentFlat(
+                            prev[0], prev[1], prev[2],
+                            pt[0],   pt[1],   pt[2],
+                            bitmapCanvas, brush, commitSpacingCarry);
                 } else {
                     stampCircle(bitmapCanvas, pt[0], pt[1],
                             BrushResolver.resolveSize(brush, pt[2]) / 2f, brush);
@@ -169,33 +174,36 @@ public class StrokeRenderer {
 
         scratchCanvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
 
-        float midPressure = points.get(points.size() / 2)[2];
-        float alpha = BrushResolver.resolveOpacity(brush, midPressure);
-
+        // Per-dab opacity is baked by stampCircleWithAlpha — composite at full alpha.
         float[] prev = null;
         for (float[] pt : points) {
             if (prev != null) {
-                renderSegmentFlat(prev[0], prev[1], prev[2],
-                                  pt[0],   pt[1],   pt[2],
-                                  scratchCanvas, brush);
+                commitSpacingCarry = renderSegmentFlat(
+                        prev[0], prev[1], prev[2],
+                        pt[0],   pt[1],   pt[2],
+                        scratchCanvas, brush, commitSpacingCarry);
             } else {
-                stampCircle(scratchCanvas, pt[0], pt[1],
-                        BrushResolver.resolveSize(brush, pt[2]) / 2f, brush);
+                float oa = BrushResolver.resolveOpacity(brush, pt[2]);
+                stampCircleWithAlpha(scratchCanvas, pt[0], pt[1],
+                        BrushResolver.resolveSize(brush, pt[2]) / 2f, oa, brush);
             }
             prev = pt;
         }
 
-        compositePaint.setAlpha((int)(alpha * 255));
+        compositePaint.setAlpha(255);
         bitmapCanvas.drawBitmap(scratchBitmap, 0, 0, compositePaint);
+        spacingCarry = 0f; // live carry reset — next stroke starts fresh
     }
 
     // ─── Direct segment apply (eraser live path) ─────────────────
 
     public void applySegmentDirect(Canvas canvas, float[] segment, BrushDescriptor brush) {
         if (segment.length < 6 || canvas == null || brush == null) return;
-        renderSegmentFlat(segment[0], segment[1], segment[2],
-                          segment[3], segment[4], segment[5],
-                          canvas, brush);
+        // Eraser uses its own isolated carry — reuse commitSpacingCarry since
+        // the eraser path never overlaps with the commit path temporally.
+        commitSpacingCarry = renderSegmentFlat(segment[0], segment[1], segment[2],
+                segment[3], segment[4], segment[5],
+                canvas, brush, commitSpacingCarry);
     }
 
     // ─── Eraser ───────────────────────────────────────────────────
@@ -210,49 +218,93 @@ public class StrokeRenderer {
         bitmapCanvas.drawPoint(x, y, eraserPaint);
     }
 
-    // ─── Core splat loop ──────────────────────────────────────────
+    // ─── Carry-over distance ──────────────────────────────────────
+    // Tracks how far into the current step interval we are between segments,
+    // so dab spacing is consistent regardless of input chunking or draw speed.
+    //
+    // Two separate carries:
+    //   spacingCarry      — used during the live front-buffer stroke
+    //   commitSpacingCarry — used exclusively inside commitStroke(), always
+    //                        starts at 0 so the committed replay is independent
+    //                        of whatever state the live carry was in. This is
+    //                        what prevents dabs from shifting after lift-off.
+    private float spacingCarry       = 0f;
+    private float commitSpacingCarry = 0f;
 
-    private void renderSegmentFlat(float ax, float ay, float ap,
-                                   float bx, float by, float bp,
-                                   Canvas target, BrushDescriptor brush) {
+    /** Exposes the live-stroke carry so CanvasOverlay can start the tether from the
+     *  exact same position — tether dabs land where the committed stroke will extend,
+     *  eliminating the visual shift on pen-lift. */
+    public float getSpacingCarry() { return spacingCarry; }
+
+    // ─── Core splat loop ──────────────────────────────────────────
+    // carry: how far into the current step interval we already are.
+    // Returns the updated carry to use for the next segment.
+
+    private float renderSegmentFlat(float ax, float ay, float ap,
+                                    float bx, float by, float bp,
+                                    Canvas target, BrushDescriptor brush,
+                                    float carry) {
         float wa = BrushResolver.resolveSize(brush, ap);
         float wb = BrushResolver.resolveSize(brush, bp);
 
-        float dx  = bx - ax;
-        float dy  = by - ay;
+        float dx    = bx - ax;
+        float dy    = by - ay;
+        float lenSq = dx * dx + dy * dy;
 
         float avgDiameter = (wa + wb) / 2f;
-        float stepPx      = Math.max(1f, avgDiameter * (brush.spacing / 100f));
+        // Spacing formula lives in BrushResolver.resolveSpacingMultiplier — shared with
+        // CanvasOverlay so the tether preview is pixel-identical to the committed stroke.
+        float stepPx = Math.max(1f, avgDiameter * BrushResolver.resolveSpacingMultiplier(brush));
 
-        float lenSq = dx * dx + dy * dy;
-        if (lenSq < stepPx * stepPx) {
-            stampCircle(target,
-                    (ax + bx) / 2f,
-                    (ay + by) / 2f,
-                    avgDiameter / 2f,
-                    brush);
-            return;
+        // Dot / tap — no length to walk, stamp once if this is the very first dab
+        if (lenSq < 0.01f) {
+            if (carry == 0f) {
+                float oa = BrushResolver.resolveOpacity(brush, ap);
+                stampCircleWithAlpha(target, ax, ay, wa / 2f, oa, brush);
+            }
+            return carry;
         }
 
-        float len   = (float) Math.sqrt(lenSq);
-        int   count = (int) Math.ceil(len / stepPx);
-        for (int i = 0; i <= count; i++) {
-            float t      = (float) i / count;
-            float x      = ax + dx * t;
-            float y      = ay + dy * t;
-            float radius = (wa + (wb - wa) * t) / 2f;
-            stampCircle(target, x, y, radius, brush);
+        float len = (float) Math.sqrt(lenSq);
+
+        // distAlongSeg = distance from segment start to where the next dab lands
+        float distAlongSeg = stepPx - carry;
+
+        if (distAlongSeg > len) {
+            // No dab lands in this segment — accumulate and move on
+            return carry + len;
         }
+
+        while (distAlongSeg <= len) {
+            float t        = distAlongSeg / len;
+            float x        = ax + dx * t;
+            float y        = ay + dy * t;
+            float radius   = (wa + (wb - wa) * t) / 2f;
+            float pressure = ap + (bp - ap) * t;
+            float alpha    = BrushResolver.resolveOpacity(brush, pressure);
+            stampCircleWithAlpha(target, x, y, radius, alpha, brush);
+            distAlongSeg  += stepPx;
+        }
+
+        // Return how far past the last dab we ended up
+        return len - (distAlongSeg - stepPx);
     }
 
     private void stampCircle(Canvas target, float x, float y, float radius, BrushDescriptor brush) {
+        stampCircleWithAlpha(target, x, y, radius, 1f, brush);
+    }
+
+    // Per-dab stamp with explicit alpha (0..1). Used when pressureControlsOpacity is true
+    // so each dab carries its own opacity rather than the whole stroke layer.
+    private void stampCircleWithAlpha(Canvas target, float x, float y, float radius,
+                                      float alpha, BrushDescriptor brush) {
         if (brush.blendMode == BrushDescriptor.BlendMode.CLEAR) {
             penPaint.setXfermode(CLEAR_XFERMODE);
             penPaint.setAlpha(255);
         } else {
             penPaint.setXfermode(null);
             penPaint.setColor(brush.color);
-            penPaint.setAlpha(255);
+            penPaint.setAlpha((int)(alpha * 255));
         }
         target.drawCircle(x, y, radius, penPaint);
     }
