@@ -20,7 +20,13 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Enable R8 full-mode shrinking and obfuscation in release builds.
+            // This was disabled (false) which means release APKs shipped with
+            // all dead code, unused resources, and no compiler optimisations.
+            // R8 typically cuts APK size 20-40% and improves runtime perf via
+            // inlining, constant-folding, and dead-code elimination.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

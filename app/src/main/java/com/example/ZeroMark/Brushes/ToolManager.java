@@ -50,7 +50,7 @@ public class ToolManager {
                 .opacity(100)                               // ← FIX: was missing, defaulted to 0
                 .opacityRange(100, 100)                     // eraser is always full-strength
                 .smoothing(50)
-                .spacing(10)
+                .spacing(4)
                 .blendMode(BrushDescriptor.BlendMode.CLEAR)
                 .build());
 

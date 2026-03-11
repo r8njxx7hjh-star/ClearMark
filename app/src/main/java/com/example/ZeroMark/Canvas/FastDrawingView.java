@@ -20,6 +20,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callback {
 
@@ -35,25 +36,35 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
     private final ToolManager        toolManager  = ToolManager.getInstance();
 
     // ─── isPenDown ────────────────────────────────────────────────
-    // True only while a pen stroke is actively in progress (ACTION_DOWN
-    // through ACTION_UP/CANCEL). This is the single gate that controls
-    // whether onDrawFrontBufferedLayer renders anything.
-    //
-    // When false (i.e. after the pen lifts and commit() is called),
-    // every queued front-buffer callback — however many the framework
-    // fires — just clears to transparent and returns. The multi-buffer
-    // layer already has the fully baked stroke, so clearing the front
-    // buffer is seamless. No suppress signal, no generation counter,
-    // no one-shot race window.
-    //
-    // Written on the main thread only; read on the renderer thread.
-    // AtomicBoolean for cross-thread visibility without locks.
+    // True only while a pen stroke is actively in progress.
+    // Written on the main thread; read on the renderer thread.
     private final AtomicBoolean isPenDown = new AtomicBoolean(false);
 
+    // ─── strokeGen ────────────────────────────────────────────────
+    // Incremented on every ACTION_DOWN. Each segment carries the generation
+    // at emit time (data[9]). onDrawFrontBufferedLayer rejects any segment
+    // whose generation doesn't match the current value.
+    //
+    // This eliminates the flicker race that occurs when a new stroke starts
+    // before the renderer has drained the previous stroke's callback queue:
+    //
+    //   Main thread (stroke N+1 ACTION_DOWN):
+    //     strokeGen++          ← N+1
+    //     isPenDown = true
+    //     beginLiveStroke()    ← clears liveBitmap
+    //
+    //   Renderer thread (draining stroke N callbacks):
+    //     onDrawFrontBufferedLayer(segmentN)
+    //       isPenDown = true  ← passes, would draw
+    //       segmentN[9] = N  != strokeGen (N+1) ← REJECTED ✓
+    //       liveBitmap is clean, nothing drawn, no flicker
+    //
+    // Without this guard the renderer reads isPenDown=true (set for the new
+    // stroke) and draws stroke N's dabs into the freshly cleared liveBitmap,
+    // producing a transparent flash visible on screen.
+    private final AtomicInteger strokeGen = new AtomicInteger(0);
+
     // ─── Opacity double-draw guard ───────────────────────────────
-    // After commitStroke bakes the stroke into canvasBitmap, the next
-    // onDrawMultiBufferedLayer must skip segment replay — the stroke is
-    // already in the bitmap and replaying would double the opacity.
     private final AtomicBoolean strokeJustCommitted = new AtomicBoolean(false);
 
     // ─── Eraser debounce ─────────────────────────────────────────
@@ -76,11 +87,10 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
 
             @Override
             public void onSegmentReady(float[] data) {
-                // data = float[9]: smoothSeg(6) + rawTip(3)
+                // data = float[10]: smoothSeg(6) + rawTip(3) + gen(1)
                 if (frontRenderer == null) return;
 
                 if (toolManager.getCurrentToolType() == ToolManager.ToolType.ERASER) {
-                    // Eraser only needs the smoothed segment — extract first 6 floats
                     float[] seg = new float[]{data[0], data[1], data[2], data[3], data[4], data[5]};
                     renderer.applySegmentDirect(bitmapCanvas, seg, toolManager.getActiveBrush());
                     if (!eraserCommitPending) {
@@ -91,14 +101,7 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                         });
                     }
                 } else {
-                    // Push smoothed segment to the front buffer (incremental, no flicker)
                     frontRenderer.renderFrontBufferedLayer(data);
-                    // Update the overlay tether:
-                    //   data[0,1]   = previous smoothed point (gives stroke direction for the Bézier)
-                    //   data[3,4,5] = current smoothed tip (tether start)
-                    //   data[6,7,8] = raw touch position  (tether end)
-                    //   getSpacingCarry() ensures tether dabs land where the committed stroke extends,
-                    //                    so there is no visual shift when the pen lifts.
                     if (canvasOverlay != null) {
                         canvasOverlay.updateTether(
                                 data[0], data[1],
@@ -114,19 +117,10 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                 if (toolManager.getCurrentToolType() == ToolManager.ToolType.ERASER) {
                     if (frontRenderer != null) frontRenderer.commit();
                 } else {
-                    // Clear the tether before commit so the front-buffer callbacks
-                    // that fire after commit() do not re-draw a stale tether segment.
                     renderer.clearTether();
                     renderer.commitStroke(bitmapCanvas, points, toolManager.getActiveBrush());
-
-                    // Signal that the pen is up BEFORE calling commit().
-                    // Every front-buffer callback the framework fires after this
-                    // point — for this stroke or any queued remnants — will see
-                    // isPenDown=false and just clear to transparent, harmlessly.
-                    // The multi-buffer layer renders the fully baked result instead.
                     isPenDown.set(false);
                     strokeJustCommitted.set(true);
-
                     if (frontRenderer != null) frontRenderer.commit();
                 }
             }
@@ -179,31 +173,23 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                         @NonNull float[] segment) {
 
                     if (!isPenDown.get()) {
-                        // Pen is up. Do NOT explicitly clear the front buffer here.
-                        //
-                        // The commit() call in onStrokeComplete resets the front buffer
-                        // at the SurfaceControl layer atomically alongside the multi-buffer
-                        // update — we don't need to do it manually.
-                        //
-                        // If we clear early (canvas.drawColor TRANSPARENT), the front
-                        // buffer goes transparent before the multi-buffer has rendered the
-                        // committed bitmap. For a quick stroke all segments are still queued
-                        // when commit() fires, so all their onDrawFrontBufferedLayer callbacks
-                        // run before onDrawMultiBufferedLayer — clearing the front buffer for
-                        // every one creates a multi-frame window where the stroke is invisible.
-                        // That's the flicker, and it's worse the faster the stroke.
-                        //
-                        // By returning without drawing, the front buffer retains whatever
-                        // content it last rendered (the full live stroke). The framework then
-                        // atomically transitions: front buffer hidden + multi-buffer shows the
-                        // committed bitmap. No gap, no flicker.
-                        //
-                        // liveBitmap doesn't need explicit clearing here — beginLiveStroke()
-                        // clears it at the start of every new stroke.
+                        // Pen is up — front buffer retains its last content.
+                        // The framework atomically transitions to the multi-buffer
+                        // on commit(), so we must NOT clear here or a transparent
+                        // gap appears between the front buffer going blank and the
+                        // multi-buffer taking over.
                         return;
                     }
 
-                    // segment = float[9]: smoothSeg[0..5] + rawTip[6..8]
+                    // Generation guard: reject callbacks from the previous stroke.
+                    // segment[9] carries the gen at emit time; strokeGen holds the
+                    // current gen (incremented at ACTION_DOWN). A mismatch means
+                    // this is a stale callback from stroke N draining after stroke
+                    // N+1 has already started and cleared liveBitmap.
+                    if (segment.length < 10 || (int) segment[9] != strokeGen.get()) {
+                        return;
+                    }
+
                     renderer.drawSegmentFrontBuffer(
                             canvas,
                             segment,
@@ -217,24 +203,6 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                         int w, int h,
                         @NonNull Collection<? extends float[]> collection) {
 
-                    // ─── Flicker fix: skip segment replay during active strokes ───
-                    //
-                    // CanvasFrontBufferedRenderer can flush buffered segments to the
-                    // multi-buffer automatically mid-stroke (not just on commit()). When
-                    // that happens, both layers would show the same dabs simultaneously:
-                    //
-                    //   Multi-buffer: committed bitmap + replayed segments at opacity
-                    //   Front buffer: liveBitmap (same dabs)          at opacity
-                    //
-                    // They composite to roughly double opacity. Every flush then causes
-                    // a visible jump between single- and double-opacity — the flicker.
-                    //
-                    // Fix: while the pen is down, skip segment replay entirely. The
-                    // front buffer's liveBitmap handles all live-stroke display. The
-                    // multi-buffer only needs to show the committed (baked) background.
-                    // At stroke end, isPenDown is false and strokeJustCommitted is true,
-                    // so we also skip replay there — commitStroke already baked the
-                    // stroke into canvasBitmap.
                     Collection<? extends float[]> segments =
                             (strokeJustCommitted.getAndSet(false) || isPenDown.get())
                                     ? Collections.emptyList()
@@ -270,16 +238,19 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
 
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
+                // Increment generation BEFORE isPenDown=true.
+                // Any renderer callbacks still draining for the previous stroke
+                // will now see a generation mismatch and return early, even if
+                // isPenDown has already been set back to true for this new stroke.
+                int gen = strokeGen.incrementAndGet();
                 isPenDown.set(true);
                 undoManager.push(canvasBitmap);
                 renderer.beginLiveStroke(
                         Math.max(getWidth(), 1),
                         Math.max(getHeight(), 1)
                 );
-                // Tell the overlay the front buffer owns the tether so it
-                // does NOT draw a duplicate at its own opacity.
                 if (canvasOverlay != null) canvasOverlay.setFrontBufferOwnsTether(true);
-                inputHandler.onDown(event);
+                inputHandler.onDown(event, gen);
                 break;
             }
             case MotionEvent.ACTION_MOVE: {
@@ -288,8 +259,6 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
-                // Flush smoothing lag first (emits remaining segments + bakes them),
-                // THEN hide the tether — so the flush animation plays fully.
                 inputHandler.onUp();
                 renderer.clearTether();
                 if (canvasOverlay != null) canvasOverlay.hideTether();
@@ -306,7 +275,7 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
                 undoManager.push(canvasBitmap);
-                inputHandler.onDown(event);
+                inputHandler.onDown(event, strokeGen.get()); // gen unused by eraser path
                 overlayUpdateCursor(event.getX(), event.getY(), event.getPressure());
                 break;
             }
@@ -359,5 +328,4 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
     private void overlayHideCursor() {
         if (canvasOverlay != null) canvasOverlay.hideCursor();
     }
-
 }

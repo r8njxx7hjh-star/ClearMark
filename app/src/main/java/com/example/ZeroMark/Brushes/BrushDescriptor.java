@@ -75,9 +75,9 @@ public class BrushDescriptor {
         b.size                    = 4;
         b.sizeMin                 = 50;
         b.sizeMax                 = 200;
-        b.pressureControlsSize    = false; //works
+        b.pressureControlsSize    = true; //works
         b.sizePressureCurve       = new float[]{0.25f, 0f, 0.75f, 1f};
-        b.tiltControlsSize        = true; //doesn't appear to work or my pen does not have it
+        b.tiltControlsSize        = false; //doesn't appear to work or my pen does not have it
         b.sizeTiltCurve           = LINEAR_CURVE; //haven't tried but linear works
 
         b.opacity                 = 100; //works fine
@@ -86,18 +86,18 @@ public class BrushDescriptor {
         b.pressureControlsOpacity = false; // per-dab opacity — stamped individually with gradient interpolation between segment endpoints so there is no steep jump
         b.opacityPressureCurve    = LINEAR_CURVE; //haven't tried but linear works
 
-        b.smoothing               = 100; // maximum smoothing — curve extended so sf@100 = 0.033 (50% more lag than the old sf@100 = 0.05)
+        b.smoothing               = 13; // maximum smoothing — curve extended so sf@100 = 0.033 (50% more lag than the old sf@100 = 0.05)
 
-        b.spacing                 = 4; //does work but not how it should, only works when drawing super fast and the spacing is inconsistant on the brush. I tried 5 and 4000 5 is good for normal strokes and 4000 is required for me to realy see the difference
+        b.spacing                 = 3; //does work but not how it should, only works when drawing super fast and the spacing is inconsistant on the brush. I tried 5 and 4000 5 is good for normal strokes and 4000 is required for me to realy see the difference
         b.shapeTipAssetId         = null;
         b.grainAssetId            = null;
 
-        b.jitterSize              = 25; //does not work
-        b.jitterOpacity           = 50; //haven't tried
+        b.jitterSize              = 0; //does not work
+        b.jitterOpacity           = 0; //haven't tried
         b.jitterRotation          = 0; //haven't tried
-        b.followStrokeAngle       = true; //doesn't work with a round brush, haven't tried
+        b.followStrokeAngle       = false; //doesn't work with a round brush, haven't tried
 
-        b.tiltControlsAngle       = true; //doesn't work with a round brush, haven't tried
+        b.tiltControlsAngle       = false; //doesn't work with a round brush, haven't tried
         b.angleTiltCurve          = LINEAR_CURVE; //doesn't work with a round brush, haven't tried
 
         b.blendMode               = BlendMode.SCREEN; //doesn't work

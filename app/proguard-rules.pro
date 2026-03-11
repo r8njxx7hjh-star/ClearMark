@@ -19,3 +19,17 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# ─── ZeroMark keep rules ────────────────────────────────────────────
+# Keep the drawing engine classes fully intact.
+# R8 must not rename or strip these since BrushDescriptor fields are
+# accessed directly (no reflection, but the Java/Kotlin interop and
+# CanvasFrontBufferedRenderer callbacks use class references that R8
+# might otherwise inline or remove).
+-keep class com.example.ZeroMark.Canvas.** { *; }
+-keep class com.example.ZeroMark.Brushes.** { *; }
+-keep class com.example.ZeroMark.tools.** { *; }
+
+# Preserve line numbers for crash reporting (optional but recommended)
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
