@@ -6,14 +6,14 @@ import com.example.ZeroMark.tools.Shape;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class ToolManager {
 
     // ─── Thread-safe singleton (initialization-on-demand holder) ──
     // The JVM guarantees that Holder.INSTANCE is initialized exactly once,
     // lazily, without any explicit synchronization needed at call sites.
-    // This replaces the previous unsynchronized "if (instance == null)" check,
-    // which could produce two instances if called from multiple threads.
     private static final class Holder {
         static final ToolManager INSTANCE = new ToolManager();
     }
@@ -26,8 +26,11 @@ public class ToolManager {
 
     public enum ToolType { PEN, ERASER, HIGHLIGHTER, SHAPE, NONE }
 
-    private ToolType currentToolType = ToolType.NONE;
-    private int activeIndex = 0;
+    // AtomicReference/AtomicInteger so renderer-thread reads of these fields
+    // are always coherent with main-thread writes — no data race on ARM/JIT.
+    private final AtomicReference<ToolType> currentToolType =
+            new AtomicReference<>(ToolType.PEN);
+    private final AtomicInteger activeIndex = new AtomicInteger(0);
 
     private final List<BrushDescriptor> brushList  = new ArrayList<>();
     private final List<BrushDescriptor> eraserList = new ArrayList<>();
@@ -59,21 +62,32 @@ public class ToolManager {
 
     // ─── Active tool access ───────────────────────────────────────
 
-    public ToolType getCurrentToolType()              { return currentToolType; }
+    public ToolType getCurrentToolType()              { return currentToolType.get(); }
 
-    public void setCurrentTool(ToolType type)         { currentToolType = type; activeIndex = 0; }
-    public void setCurrentTool(ToolType type, int i)  { currentToolType = type; activeIndex = i; }
+    public void setCurrentTool(ToolType type) {
+        currentToolType.set(type);
+        activeIndex.set(0);
+    }
+
+    public void setCurrentTool(ToolType type, int i) {
+        currentToolType.set(type);
+        activeIndex.set(i);
+    }
 
     public BrushDescriptor getActiveBrush() {
-        if (currentToolType == ToolType.NONE) return null;
-        if (currentToolType == ToolType.ERASER) {
-            return eraserList.get(activeIndex);
+        ToolType type = currentToolType.get();
+        int idx = activeIndex.get();
+        if (type == ToolType.NONE) return null;
+        if (type == ToolType.ERASER) {
+            if (idx < 0 || idx >= eraserList.size()) return null;
+            return eraserList.get(idx);
         } else {
-            return brushList.get(activeIndex);
+            if (idx < 0 || idx >= brushList.size()) return null;
+            return brushList.get(idx);
         }
     }
 
-    public Shape getActiveShape() { return shapeList.get(activeIndex); }
+    public Shape getActiveShape() { return shapeList.get(activeIndex.get()); }
 
     // ─── List access (for UI) ─────────────────────────────────────
 

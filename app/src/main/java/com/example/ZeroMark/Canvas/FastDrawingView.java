@@ -14,6 +14,7 @@ import android.view.SurfaceView;
 import androidx.annotation.NonNull;
 import androidx.graphics.lowlatency.CanvasFrontBufferedRenderer;
 
+import com.example.ZeroMark.Brushes.BrushDescriptor;
 import com.example.ZeroMark.Brushes.ToolManager;
 
 import java.util.Collection;
@@ -67,9 +68,6 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
     // ─── Opacity double-draw guard ───────────────────────────────
     private final AtomicBoolean strokeJustCommitted = new AtomicBoolean(false);
 
-    // ─── Eraser debounce ─────────────────────────────────────────
-    private boolean eraserCommitPending = false;
-
     // =================================================================
 
     public FastDrawingView(Context context) {
@@ -88,41 +86,46 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
             @Override
             public void onSegmentReady(float[] data) {
                 // data = float[10]: smoothSeg(6) + rawTip(3) + gen(1)
+                // Both pen and eraser go through renderFrontBufferedLayer so
+                // every dab — regardless of tool — uses the same hardware path.
                 if (frontRenderer == null) return;
-
-                if (toolManager.getCurrentToolType() == ToolManager.ToolType.ERASER) {
-                    float[] seg = new float[]{data[0], data[1], data[2], data[3], data[4], data[5]};
-                    renderer.applySegmentDirect(bitmapCanvas, seg, toolManager.getActiveBrush());
-                    if (!eraserCommitPending) {
-                        eraserCommitPending = true;
-                        post(() -> {
-                            eraserCommitPending = false;
-                            if (frontRenderer != null) frontRenderer.commit();
-                        });
-                    }
-                } else {
-                    frontRenderer.renderFrontBufferedLayer(data);
-                    if (canvasOverlay != null) {
-                        canvasOverlay.updateTether(
-                                data[0], data[1],
-                                data[3], data[4], data[5],
-                                data[6], data[7], data[8],
-                                renderer.getSpacingCarry());
-                    }
+                frontRenderer.renderFrontBufferedLayer(data);
+                if (canvasOverlay != null) {
+                    canvasOverlay.updateTether(
+                            data[0], data[1],
+                            data[3], data[4], data[5],
+                            data[6], data[7], data[8],
+                            renderer.getSpacingCarry());
                 }
             }
 
             @Override
             public void onStrokeComplete(List<float[]> points) {
-                if (toolManager.getCurrentToolType() == ToolManager.ToolType.ERASER) {
-                    if (frontRenderer != null) frontRenderer.commit();
-                } else {
-                    renderer.clearTether();
-                    renderer.commitStroke(bitmapCanvas, points, toolManager.getActiveBrush());
-                    isPenDown.set(false);
-                    strokeJustCommitted.set(true);
-                    if (frontRenderer != null) frontRenderer.commit();
+                renderer.clearTether();
+
+                // CRITICAL ORDER: set isPenDown=false BEFORE commitStroke.
+                //
+                // onUp() emits catch-up segments via renderFrontBufferedLayer,
+                // queuing callbacks to onDrawFrontBufferedLayer on the renderer
+                // thread. Those callbacks call session.record() while they
+                // drain. If isPenDown were still true during commitStroke, the
+                // renderer thread could be inside session.record() at the same
+                // time the main thread snapshots session.segments — a
+                // ConcurrentModificationException (crash on 2nd+ stroke lift).
+                //
+                // Setting isPenDown=false first means any still-pending callback
+                // sees isPenDown=false and returns early before touching the
+                // session. StrokeRenderer.commitStroke also takes a synchronized
+                // snapshot as a second line of defence for any callback already
+                // past the isPenDown check.
+                isPenDown.set(false);
+
+                BrushDescriptor brush = toolManager.getActiveBrush();
+                if (brush != null) {
+                    renderer.commitStroke(bitmapCanvas, brush);
                 }
+                strokeJustCommitted.set(true);
+                if (frontRenderer != null) frontRenderer.commit();
             }
         });
     }
@@ -190,10 +193,13 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                         return;
                     }
 
+                    BrushDescriptor brush = toolManager.getActiveBrush();
+                    if (brush == null) return;
+
                     renderer.drawSegmentFrontBuffer(
                             canvas,
                             segment,
-                            toolManager.getActiveBrush()
+                            brush
                     );
                 }
 
@@ -202,6 +208,15 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                         @NonNull Canvas canvas,
                         int w, int h,
                         @NonNull Collection<? extends float[]> collection) {
+
+                    BrushDescriptor brush = toolManager.getActiveBrush();
+                    if (brush == null) {
+                        // No active brush — just blit the committed bitmap and bail.
+                        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
+                        canvas.drawColor(Color.WHITE);
+                        if (canvasBitmap != null) canvas.drawBitmap(canvasBitmap, 0, 0, bitmapPaint);
+                        return;
+                    }
 
                     Collection<? extends float[]> segments =
                             (strokeJustCommitted.getAndSet(false) || isPenDown.get())
@@ -212,7 +227,7 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
                             canvas,
                             canvasBitmap,
                             segments,
-                            toolManager.getActiveBrush()
+                            brush
                     );
                 }
             };
@@ -231,63 +246,40 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
         return true;
     }
 
-    // ─── Pen touch ────────────────────────────────────────────────
+    // ─── Stroke touch (pen + eraser unified) ─────────────────────
+    // Both tools flow through renderFrontBufferedLayer → drawSegmentFrontBuffer
+    // → StrokeSession → commitStroke. The brush's blendMode (NORMAL vs CLEAR)
+    // determines whether dabs stamp or erase — the touch flow is identical.
 
-    private void handlePenTouch(MotionEvent event) {
+    private void handlePenTouch(MotionEvent event)    { handleStrokeTouch(event, false); }
+    private void handleEraserTouch(MotionEvent event) { handleStrokeTouch(event, true);  }
+
+    private void handleStrokeTouch(MotionEvent event, boolean isEraser) {
         if (frontRenderer == null) return;
+        if (toolManager.getActiveBrush() == null) return;
 
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN: {
-                // Increment generation BEFORE isPenDown=true.
-                // Any renderer callbacks still draining for the previous stroke
-                // will now see a generation mismatch and return early, even if
-                // isPenDown has already been set back to true for this new stroke.
                 int gen = strokeGen.incrementAndGet();
                 isPenDown.set(true);
                 undoManager.push(canvasBitmap);
-                renderer.beginLiveStroke(
-                        Math.max(getWidth(), 1),
-                        Math.max(getHeight(), 1)
-                );
+                renderer.beginLiveStroke();
                 if (canvasOverlay != null) canvasOverlay.setFrontBufferOwnsTether(true);
                 inputHandler.onDown(event, gen);
+                if (isEraser) overlayUpdateCursor(event.getX(), event.getY(), event.getPressure());
                 break;
             }
             case MotionEvent.ACTION_MOVE: {
                 inputHandler.onMove(event);
+                if (isEraser) overlayUpdateCursor(event.getX(), event.getY(), event.getPressure());
                 break;
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
                 inputHandler.onUp();
                 renderer.clearTether();
-                if (canvasOverlay != null) canvasOverlay.hideTether();
-                break;
-            }
-        }
-    }
-
-    // ─── Eraser touch ─────────────────────────────────────────────
-
-    private void handleEraserTouch(MotionEvent event) {
-        if (frontRenderer == null) return;
-
-        switch (event.getActionMasked()) {
-            case MotionEvent.ACTION_DOWN: {
-                undoManager.push(canvasBitmap);
-                inputHandler.onDown(event, strokeGen.get()); // gen unused by eraser path
-                overlayUpdateCursor(event.getX(), event.getY(), event.getPressure());
-                break;
-            }
-            case MotionEvent.ACTION_MOVE: {
-                inputHandler.onMove(event);
-                overlayUpdateCursor(event.getX(), event.getY(), event.getPressure());
-                break;
-            }
-            case MotionEvent.ACTION_UP:
-            case MotionEvent.ACTION_CANCEL: {
-                inputHandler.onUp();
-                overlayHideCursor();
+                if (isEraser) { overlayHideCursor(); }
+                else          { if (canvasOverlay != null) canvasOverlay.hideTether(); }
                 break;
             }
         }
