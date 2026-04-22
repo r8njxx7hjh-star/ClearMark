@@ -1,4 +1,4 @@
-package com.example.ZeroMark.ui
+package com.example.zeromark.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.*

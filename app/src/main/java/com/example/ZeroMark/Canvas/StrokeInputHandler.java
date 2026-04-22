@@ -1,8 +1,9 @@
-package com.example.ZeroMark.Canvas;
+package com.example.zeromark.canvas;
 
+import android.graphics.Matrix;
 import android.view.MotionEvent;
 
-import com.example.ZeroMark.Brushes.ToolManager;
+import com.example.zeromark.brushes.ToolManager;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,16 +17,22 @@ public class StrokeInputHandler {
     private float lastRawY = 0f;
     private float lastRawP = 0f;
 
+    private Matrix inverseMatrix = new Matrix();
+
+    public void setInverseMatrix(Matrix matrix) {
+        this.inverseMatrix = matrix;
+    }
+
+    private float[] mapPoint(float x, float y) {
+        float[] pts = new float[]{x, y};
+        inverseMatrix.mapPoints(pts);
+        return pts;
+    }
+
     // Stroke generation: embedded as data[9] in every emitted float[10] segment.
-    // FastDrawingView increments this on each ACTION_DOWN and checks it in
-    // onDrawFrontBufferedLayer. Callbacks queued for stroke N are silently dropped
-    // once stroke N+1 has started (generation mismatch), which eliminates the
-    // race where old renderer callbacks fire after liveBitmap has been cleared
-    // for the new stroke and cause a transparent-frame flicker.
     private int currentGen = 0;
 
     public interface Listener {
-        // float[10]: [0..5] smoothed segment, [6..8] raw tip, [9] stroke generation
         void onSegmentReady(float[] data);
         void onStrokeComplete(List<float[]> points);
     }
@@ -39,7 +46,8 @@ public class StrokeInputHandler {
         currentPointerId = event.getPointerId(event.getActionIndex());
         strokePoints.clear();
         lastPoint = null;
-        consumePoint(event.getX(), event.getY(), event.getPressure());
+        float[] pts = mapPoint(event.getX(), event.getY());
+        consumePoint(pts[0], pts[1], event.getPressure());
     }
 
     public void onMove(MotionEvent event) {
@@ -48,25 +56,26 @@ public class StrokeInputHandler {
 
         int hist = event.getHistorySize();
         for (int h = 0; h < hist; h++) {
+            float[] hpts = mapPoint(event.getHistoricalX(idx, h), event.getHistoricalY(idx, h));
             consumePoint(
-                    event.getHistoricalX(idx, h),
-                    event.getHistoricalY(idx, h),
+                    hpts[0],
+                    hpts[1],
                     event.getHistoricalPressure(idx, h));
         }
-        consumePoint(event.getX(idx), event.getY(idx), event.getPressure(idx));
+        float[] pts = mapPoint(event.getX(idx), event.getY(idx));
+        consumePoint(pts[0], pts[1], event.getPressure(idx));
     }
 
     public void onUp() {
         if (currentPointerId == -1) return;
 
-        // Flush smoothing lag: run EMA toward the final raw position, emitting
-        // each catch-up segment to the front buffer AND to strokePoints.
         if (lastPoint != null) {
             float smoothing = ToolManager.getInstance().getActiveBrush().smoothing;
             float sf = smoothingFactor(smoothing);
             for (int i = 0; i < 500; i++) {
                 float dx = lastRawX - lastPoint[0];
                 float dy = lastRawY - lastPoint[1];
+                // Threshold: only catch up if distance is > 0.5px
                 if (dx * dx + dy * dy < 0.25f) break;
                 float sx = lastPoint[0] + dx * sf;
                 float sy = lastPoint[1] + dy * sf;
@@ -101,12 +110,22 @@ public class StrokeInputHandler {
             return;
         }
 
+        float dx = x - lastRawX;
+        float dy = y - lastRawY;
+        // Threshold: ignore moves smaller than 0.5px raw to reduce noise and segment count
+        if (dx * dx + dy * dy < 0.25f && Math.abs(p - lastRawP) < 0.01f) return;
+
         lastRawX = x;  lastRawY = y;  lastRawP = p;
 
         float sf = smoothingFactor(smoothing);
         float sx = lastPoint[0] + (x - lastPoint[0]) * sf;
         float sy = lastPoint[1] + (y - lastPoint[1]) * sf;
         float sp = lastPoint[2] + (p - lastPoint[2]) * Math.min(sf + 0.2f, 1f);
+
+        // Distance check for the smoothed point vs lastPoint
+        float sdx = sx - lastPoint[0];
+        float sdy = sy - lastPoint[1];
+        if (sdx * sdx + sdy * sdy < 0.01f) return; // Ignore effectively zero-length smoothed segments
 
         float[] newPt = {sx, sy, sp};
         float[] data  = {lastPoint[0], lastPoint[1], lastPoint[2],

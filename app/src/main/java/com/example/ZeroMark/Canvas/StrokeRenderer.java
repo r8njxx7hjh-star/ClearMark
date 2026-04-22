@@ -1,4 +1,4 @@
-package com.example.ZeroMark.Canvas;
+package com.example.zeromark.canvas;
 
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -9,10 +9,10 @@ import android.graphics.PorterDuffXfermode;
 import android.graphics.Rect;
 import android.graphics.RectF;
 
-import com.example.ZeroMark.Brushes.BrushDescriptor;
+import com.example.zeromark.brushes.BrushDescriptor;
+import com.example.zeromark.canvas.model.Stroke;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 
 /**
@@ -25,7 +25,14 @@ import java.util.List;
  *
  *   drawStroke / drawSegmentFrontBuffer
  *     └─ renderSegment(ax,ay,ap, bx,by,bp, …, alphaMultiplier)
- *           └─ stampDab(x, y, radius, alpha, alphaMultiplier, brush, paint)
+ *           └─ stampDab(x, y, radius, alpha, paint)
+ *
+ * Paint ownership
+ * ───────────────
+ * Paint state (xfermode, color) is configured ONCE per stroke by the caller
+ * before entering renderSegment, via configurePaint(). stampDab only sets
+ * per-dab alpha — it never touches xfermode or color. This eliminates
+ * O(N) redundant setXfermode/setColor calls across the dab loop.
  *
  * Opacity consistency — live vs committed
  * ────────────────────────────────────────
@@ -41,6 +48,14 @@ import java.util.List;
  * visual opacity at the cost of letting overlapping dabs stack (fine for
  * normal spacing; only visible with heavy overlap at low opacity). The
  * committed stroke matches what was drawn live.
+ *
+ * Eraser on the live path
+ * ───────────────────────
+ * PorterDuff.Mode.CLEAR only works correctly when drawing into an offscreen
+ * bitmap or a saveLayer — on a hardware-accelerated Canvas it punches through
+ * to the window background. The commit path is always bitmap-backed so CLEAR
+ * works there without a saveLayer. The live path must wrap each eraser segment
+ * in its own saveLayer to isolate the CLEAR operation.
  *
  * Thread safety
  * ─────────────
@@ -86,26 +101,19 @@ public class StrokeRenderer {
 
     private final StrokeSession session = new StrokeSession();
 
-    // ─── Scratch bitmap (commit path, NORMAL blend only) ─────────
-    private Bitmap scratchBitmap;
-    private Canvas scratchCanvas;
-
-    // ─── Thread-split paints ──────────────────────────────────────
-    //   penPaint    → renderer thread (drawSegmentFrontBuffer, drawFullCanvas)
-    //   commitPaint → main thread     (commitStroke)
-    private final Paint penPaint    = createStrokePaint();
-    private final Paint commitPaint = createStrokePaint();
-
-    private final Paint bitmapPaint    = new Paint(Paint.FILTER_BITMAP_FLAG);
-    private final Paint layerPaint     = new Paint();
-    private final Paint compositePaint = new Paint(Paint.FILTER_BITMAP_FLAG);
+    // ─── Thread-isolated paints ──────────────────────────────────
+    // We use ThreadLocal because this renderer is called from:
+    // 1. Renderer Thread (Live front-buffer & Multi-buffer replay)
+    // 2. Background Threads (Tile rendering via CanvasModel)
+    // 3. UI Thread (Pending stroke patches during tile stalls)
+    // Sharing a single Paint object causes race conditions where a Pen
+    // stroke might inherit the "White fallback" color of an Eraser stroke.
+    private final ThreadLocal<Paint> strokePaint = ThreadLocal.withInitial(StrokeRenderer::createStrokePaint);
+    private final ThreadLocal<Paint> layerPaint  = ThreadLocal.withInitial(Paint::new);
+    private final ThreadLocal<Paint> bitmapPaint = ThreadLocal.withInitial(() -> new Paint(Paint.FILTER_BITMAP_FLAG));
 
     private static final PorterDuffXfermode CLEAR_XFERMODE =
             new PorterDuffXfermode(PorterDuff.Mode.CLEAR);
-
-    // ─── Dirty-region tracking (commit path only) ────────────────
-    private final RectF commitDirty  = new RectF();
-    private final Rect  dirtyIntRect = new Rect();
 
     // ─── Spacing carry (renderer thread) ─────────────────────────
     private float spacingCarry = 0f;
@@ -129,6 +137,27 @@ public class StrokeRenderer {
     }
 
     // =================================================================
+    // Paint configuration
+    // =================================================================
+
+    /**
+     * Configure paint for a brush type — xfermode and base color.
+     * Called once per stroke (or per segment on the live path) so the
+     * dab loop never needs to touch xfermode or color.
+     */
+    private static void configurePaint(Paint paint, BrushDescriptor brush, Canvas canvas) {
+        if (brush.blendMode == BrushDescriptor.BlendMode.CLEAR) {
+            paint.setXfermode(CLEAR_XFERMODE);
+            // Alpha is always 255 for CLEAR — the mode itself handles erasure.
+            // Set it here so stampDab doesn't need a branch.
+            paint.setAlpha(255);
+        } else {
+            paint.setXfermode(null);
+            paint.setColor(brush.color);
+        }
+    }
+
+    // =================================================================
     // Live path  —  renderer thread
     // =================================================================
 
@@ -140,10 +169,15 @@ public class StrokeRenderer {
      *                   [6..8] raw tip (bx,by,bp),
      *                   [9]    stroke generation.
      *
-     * alphaMultiplier = resolveLayerAlpha(brush) is applied per-dab here
-     * because the front-buffer canvas is cumulative — we cannot wrap the
-     * whole stroke in a single saveLayer the way drawStroke (commit path)
-     * does. Pre-multiplying achieves the same overall opacity.
+     * Eraser (CLEAR) path:
+     *   PorterDuff.CLEAR punches through to the window background on a
+     *   hardware canvas. Wrapping in saveLayer creates an offscreen buffer
+     *   where CLEAR operates correctly, then composites back normally.
+     *
+     * Pen path:
+     *   resolveLayerAlpha is pre-multiplied per dab because the front-buffer
+     *   canvas is cumulative — we cannot wrap the whole stroke in a saveLayer
+     *   the way the commit path does.
      */
     public void drawSegmentFrontBuffer(Canvas canvas, float[] data, BrushDescriptor brush) {
         if (data.length < 9) return;
@@ -151,25 +185,24 @@ public class StrokeRenderer {
         float ax = data[0], ay = data[1], ap = data[2];
         float bx = data[3], by = data[4], bp = data[5];
 
-        // Apply brush.opacity to live dabs so they match the committed stroke.
-        // Commit path achieves this via saveLayer; live path pre-multiplies here.
-        final float layerAlpha = BrushResolver.resolveLayerAlpha(brush);
+        Paint paint = strokePaint.get();
+        configurePaint(paint, brush, canvas);
 
-        session.record(ax, ay, ap, bx, by, bp);
-
-        spacingCarry = renderSegment(ax, ay, ap, bx, by, bp,
-                canvas, brush, spacingCarry, null, penPaint, layerAlpha);
-
-        tetherAx = bx; tetherAy = by; tetherAp = bp;
-        tetherBx = data[6]; tetherBy = data[7]; tetherBp = data[8];
-        hasTether = true;
-
-        float dx = tetherBx - tetherAx;
-        float dy = tetherBy - tetherAy;
-        if (dx * dx + dy * dy >= 1f) {
-            renderSegment(tetherAx, tetherAy, tetherAp,
-                    tetherBx, tetherBy, tetherBp,
-                    canvas, brush, spacingCarry, null, penPaint, layerAlpha);
+        if (brush.blendMode == BrushDescriptor.BlendMode.CLEAR) {
+            // Restore saveLayer for the live hardware front-buffer.
+            // Since this canvas is hardware-accelerated and only contains
+            // front-buffer segments, we MUST use saveLayer to prevent
+            // punching to the window background.
+            int count = canvas.saveLayer(null, null);
+            spacingCarry = renderSegment(ax, ay, ap, bx, by, bp,
+                    canvas, brush, spacingCarry, null, paint, 1.0f);
+            canvas.restoreToCount(count);
+        } else {
+            // Pre-multiply brush opacity into each dab to match the committed stroke,
+            // which achieves overall opacity via saveLayer in drawStroke.
+            final float layerAlpha = BrushResolver.resolveLayerAlpha(brush);
+            spacingCarry = renderSegment(ax, ay, ap, bx, by, bp,
+                    canvas, brush, spacingCarry, null, paint, layerAlpha);
         }
     }
 
@@ -178,14 +211,12 @@ public class StrokeRenderer {
     // =================================================================
 
     public void drawFullCanvas(Canvas canvas, Bitmap committed,
-                               Collection<? extends float[]> segments,
+                               float[] flatSegments,
                                BrushDescriptor brush) {
-        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
-        canvas.drawColor(Color.WHITE);
-        if (committed != null) canvas.drawBitmap(committed, 0, 0, bitmapPaint);
-        if (segments.isEmpty()) return;
+        if (committed != null) canvas.drawBitmap(committed, 0, 0, bitmapPaint.get());
+        if (flatSegments.length == 0) return;
 
-        drawStroke(canvas, segments, brush, 0f, penPaint);
+        drawStroke(canvas, flatSegments, brush, 0f, strokePaint.get());
     }
 
     // =================================================================
@@ -199,37 +230,46 @@ public class StrokeRenderer {
      */
     public void commitStroke(Canvas bitmapCanvas, BrushDescriptor brush) {
         final List<float[]> snapshot = session.snapshot();
-        if (snapshot.isEmpty()) return;
+        float[] flat = new float[snapshot.size() * 6];
+        for (int i = 0; i < snapshot.size(); i++) {
+            System.arraycopy(snapshot.get(i), 0, flat, i * 6, 6);
+        }
+        commitStrokeInternal(bitmapCanvas, brush, flat, false);
+    }
 
-        final boolean isClear = brush.blendMode == BrushDescriptor.BlendMode.CLEAR;
+    public void commitStrokeForTile(Canvas canvas, Stroke stroke) {
+        commitStrokeInternal(canvas, stroke.getBrush(), stroke.getPoints(), false);
+    }
 
-        if (isClear) {
-            drawStroke(bitmapCanvas, snapshot, brush, 0f, commitPaint);
-            return;
+    public void commitStrokeForTileSimplified(Canvas canvas, Stroke stroke) {
+        commitStrokeInternal(canvas, stroke.getBrush(), stroke.getPoints(), true);
+    }
+
+    private void commitStrokeInternal(Canvas canvas, BrushDescriptor brush,
+                                      float[] points, boolean simplified) {
+        if (points.length == 0) return;
+        Paint paint = strokePaint.get();
+        if (simplified && brush.blendMode != BrushDescriptor.BlendMode.CLEAR) {
+            drawStrokeSimplified(canvas, points, brush, paint);
+        } else {
+            drawStroke(canvas, points, brush, 0f, paint);
+        }
+    }
+
+    private void drawStrokeSimplified(Canvas target, float[] points,
+                                      BrushDescriptor brush, Paint paint) {
+        configurePaint(paint, brush, target);
+        paint.setAlpha(255); // Full opacity for performance mode lines
+        paint.setStrokeWidth(brush.size);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStyle(Paint.Style.STROKE);
+
+        for (int i = 0; i < points.length; i += 6) {
+            target.drawLine(points[i], points[i + 1], points[i + 3], points[i + 4], paint);
         }
 
-        int w = bitmapCanvas.getWidth();
-        int h = bitmapCanvas.getHeight();
-        ensureScratch(w, h);
-
-        commitDirty.setEmpty();
-        drawStroke(scratchCanvas, snapshot, brush, 0f, commitPaint, commitDirty);
-
-        if (!commitDirty.isEmpty()) {
-            int l = Math.max(0, (int) Math.floor(commitDirty.left)   - 1);
-            int t = Math.max(0, (int) Math.floor(commitDirty.top)    - 1);
-            int r = Math.min(w, (int) Math.ceil (commitDirty.right)  + 1);
-            int b = Math.min(h, (int) Math.ceil (commitDirty.bottom) + 1);
-            if (l < r && t < b) {
-                dirtyIntRect.set(l, t, r, b);
-                compositePaint.setAlpha((int)(BrushResolver.resolveLayerAlpha(brush) * 255));
-                bitmapCanvas.drawBitmap(scratchBitmap, dirtyIntRect, dirtyIntRect, compositePaint);
-                scratchCanvas.save();
-                scratchCanvas.clipRect(dirtyIntRect);
-                scratchCanvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR);
-                scratchCanvas.restore();
-            }
-        }
+        // Reset paint style for normal dab rendering
+        paint.setStyle(Paint.Style.FILL);
     }
 
     // =================================================================
@@ -242,7 +282,9 @@ public class StrokeRenderer {
                                    BrushDescriptor brush) {
         // Preview is drawn inside CanvasOverlay's own saveLayer(layerPaint),
         // so alphaMultiplier=1.0f here — the layer handles opacity.
-        renderSegment(ax, ay, ap, bx, by, bp, canvas, brush, spacingCarry, null, penPaint, 1.0f);
+        Paint paint = strokePaint.get();
+        configurePaint(paint, brush, canvas);
+        renderSegment(ax, ay, ap, bx, by, bp, canvas, brush, spacingCarry, null, paint, 1.0f);
     }
 
     // =================================================================
@@ -250,51 +292,59 @@ public class StrokeRenderer {
     // =================================================================
 
     /**
-     * Draw a stroke by wrapping segments in a saveLayer at resolveLayerAlpha.
-     * Used by commit path and multi-buffer replay.
-     * alphaMultiplier inside renderSegment is 1.0f — the saveLayer handles opacity.
+     * Draw a full stroke, wrapping it in a saveLayer at resolveLayerAlpha so
+     * overlapping dabs don't stack beyond the brush opacity.
+     * configurePaint() is called here so the dab loop in renderSegment never
+     * needs to touch xfermode or color.
+     *
+     * Used by the commit path and multi-buffer replay.
      */
-    private void drawStroke(Canvas target,
-                             Collection<? extends float[]> segments,
-                             BrushDescriptor brush,
-                             float initialCarry,
-                             Paint paint) {
+    private void drawStroke(Canvas target, float[] segments, BrushDescriptor brush,
+                            float initialCarry, Paint paint) {
         drawStroke(target, segments, brush, initialCarry, paint, null);
     }
 
-    private void drawStroke(Canvas target,
-                             Collection<? extends float[]> segments,
-                             BrushDescriptor brush,
-                             float initialCarry,
-                             Paint paint,
-                             RectF dirtyOut) {
-        if (segments.isEmpty()) return;
+    private void drawStroke(Canvas target, float[] segments, BrushDescriptor brush,
+                            float initialCarry, Paint paint, RectF dirtyOut) {
+        if (segments.length == 0) return;
 
-        final boolean isClear = brush.blendMode == BrushDescriptor.BlendMode.CLEAR;
+        // Configure paint once — xfermode and base color.
+        // stampDab only updates per-dab alpha from here on.
+        configurePaint(paint, brush, target);
 
-        if (isClear) {
+        if (brush.blendMode == BrushDescriptor.BlendMode.CLEAR) {
+            // Erasers (CLEAR) MUST draw directly to the canvas. Using saveLayer
+            // creates an empty buffer, isolating the CLEAR operation and making
+            // it a no-op on bitmap-backed canvases.
             float carry = initialCarry;
-            for (float[] seg : segments)
-                carry = renderSegment(seg[0], seg[1], seg[2],
-                        seg[3], seg[4], seg[5],
+            for (int i = 0; i < segments.length; i += 6) {
+                carry = renderSegment(
+                        segments[i],     segments[i + 1], segments[i + 2],
+                        segments[i + 3], segments[i + 4], segments[i + 5],
                         target, brush, carry, dirtyOut, paint, 1.0f);
+            }
         } else {
-            // saveLayer applies brush.opacity once to the whole stroke so
-            // overlapping dabs don't stack beyond it. alphaMultiplier=1.0f
-            // inside because the layer itself carries the opacity.
-            layerPaint.setAlpha((int)(BrushResolver.resolveLayerAlpha(brush) * 255));
-            target.saveLayer(null, layerPaint);
+            Paint lp = layerPaint.get();
+            lp.setAlpha((int) (BrushResolver.resolveLayerAlpha(brush) * 255));
+            int layerCount = target.saveLayer(null, lp);
+
             float carry = initialCarry;
-            for (float[] seg : segments)
-                carry = renderSegment(seg[0], seg[1], seg[2],
-                        seg[3], seg[4], seg[5],
+            for (int i = 0; i < segments.length; i += 6) {
+                carry = renderSegment(
+                        segments[i],     segments[i + 1], segments[i + 2],
+                        segments[i + 3], segments[i + 4], segments[i + 5],
                         target, brush, carry, dirtyOut, paint, 1.0f);
-            target.restore();
+            }
+
+            target.restoreToCount(layerCount);
         }
     }
 
     /**
      * Stamp dabs along one segment (a→b). Returns the updated spacing carry.
+     *
+     * Paint xfermode and color must already be set by the caller via
+     * configurePaint(). This method only mutates paint.alpha per dab.
      *
      * @param alphaMultiplier  multiplied into each dab's alpha.
      *                         Pass resolveLayerAlpha for the live front-buffer path;
@@ -308,14 +358,35 @@ public class StrokeRenderer {
         float wa = BrushResolver.resolveSize(brush, ap);
         float wb = BrushResolver.resolveSize(brush, bp);
 
+        // --- Early exit if segment is outside clip bounds ---
+        float maxR  = Math.max(wa, wb) / 2f;
+        float sLeft = Math.min(ax, bx) - maxR;
+        float sTop  = Math.min(ay, by) - maxR;
+        float sRight  = Math.max(ax, bx) + maxR;
+        float sBottom = Math.max(ay, by) + maxR;
+
+        Rect clip = target.getClipBounds();
+        if (sLeft > clip.right || sRight < clip.left || sTop > clip.bottom || sBottom < clip.top) {
+            float dx  = bx - ax;
+            float dy  = by - ay;
+            float len = (float) Math.sqrt(dx * dx + dy * dy);
+            if (len == 0) return carry;
+            float startStep    = Math.max(1f, wa * BrushResolver.resolveSpacingMultiplier(brush));
+            float distAlongSeg = startStep - carry;
+            if (distAlongSeg > len) return carry + len;
+            float lastStep  = Math.max(1f, wb * BrushResolver.resolveSpacingMultiplier(brush));
+            float remaining = (len - distAlongSeg) % lastStep;
+            return remaining;
+        }
+
         float dx    = bx - ax;
         float dy    = by - ay;
         float lenSq = dx * dx + dy * dy;
 
-        float avgDiameter = (wa + wb) / 2f;
-        float stepPx = Math.max(1f, avgDiameter * BrushResolver.resolveSpacingMultiplier(brush));
+        final float spacingMult = BrushResolver.resolveSpacingMultiplier(brush);
+        float len = (float) Math.sqrt(lenSq);
 
-        if (lenSq < 0.01f) {
+        if (len == 0f) {
             if (carry == 0f) {
                 float r  = wa / 2f;
                 float oa = BrushResolver.resolveDabAlpha(brush, ap) * alphaMultiplier;
@@ -325,10 +396,15 @@ public class StrokeRenderer {
             return carry;
         }
 
-        float len          = (float) Math.sqrt(lenSq);
-        float distAlongSeg = stepPx - carry;
-        if (distAlongSeg > len) return carry + len;
+        // --- Per-dab adaptive stepping -----------------------------------
+        // stepPx is recomputed at each dab from the local radius at that t,
+        // so the overlap ratio stays constant even as pressure (and therefore
+        // size) changes across the segment.
+        float startStep    = Math.max(1f, wa * spacingMult);
+        float distAlongSeg = startStep - carry;
+        if (distAlongSeg > len) return carry + len; // no dab fits — accumulate
 
+        float lastStep = startStep;
         while (distAlongSeg <= len) {
             float t        = distAlongSeg / len;
             float x        = ax + dx * t;
@@ -338,22 +414,26 @@ public class StrokeRenderer {
             float alpha    = BrushResolver.resolveDabAlpha(brush, pressure) * alphaMultiplier;
             stampDab(target, x, y, radius, alpha, brush, paint);
             if (dirtyOut != null) dirtyOut.union(x - radius, y - radius, x + radius, y + radius);
-            distAlongSeg += stepPx;
+
+            lastStep       = Math.max(1f, radius * 2f * spacingMult);
+            distAlongSeg  += lastStep;
         }
 
-        return len - (distAlongSeg - stepPx);
+        return len - (distAlongSeg - lastStep);
     }
 
-    private void stampDab(Canvas target, float x, float y, float radius,
-                          float alpha, BrushDescriptor brush, Paint paint) {
-        if (brush.blendMode == BrushDescriptor.BlendMode.CLEAR) {
-            paint.setXfermode(CLEAR_XFERMODE);
-            paint.setAlpha(255);
-        } else {
-            paint.setXfermode(null);
-            paint.setColor(brush.color);
-            paint.setAlpha((int) (alpha * 255));
-        }
+    /**
+     * Draw a single dab circle.
+     *
+     * Paint xfermode and color are already configured by the caller.
+     * This method ONLY sets alpha (which varies per dab by pressure) and draws.
+     *
+     * For CLEAR strokes, alpha is already 255 from configurePaint() and
+     * alphaMultiplier=1.0f, so the setAlpha call is a no-op in that branch.
+     */
+    private static void stampDab(Canvas target, float x, float y, float radius,
+                                 float alpha, BrushDescriptor brush, Paint paint) {
+        paint.setAlpha((int) (alpha * 255));
         target.drawCircle(x, y, radius, paint);
     }
 
@@ -361,19 +441,13 @@ public class StrokeRenderer {
     // Internals
     // =================================================================
 
-    private void ensureScratch(int w, int h) {
-        if (scratchBitmap == null
-                || scratchBitmap.getWidth()  != w
-                || scratchBitmap.getHeight() != h) {
-            if (scratchBitmap != null) scratchBitmap.recycle();
-            scratchBitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-            scratchCanvas = new Canvas(scratchBitmap);
-        }
-    }
-
     private static Paint createStrokePaint() {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         p.setStyle(Paint.Style.FILL);
         return p;
+    }
+
+    public StrokeSession getSession() {
+        return session;
     }
 }

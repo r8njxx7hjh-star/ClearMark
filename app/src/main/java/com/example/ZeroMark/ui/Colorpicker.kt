@@ -1,4 +1,4 @@
-package com.example.ZeroMark.ui
+package com.example.zeromark.ui
 
 import android.graphics.BitmapShader
 import android.graphics.Matrix
@@ -40,7 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
-import com.example.ZeroMark.R
+import com.example.zeromark.R
 
 // ── HSV SV Square ─────────────────────────────────────────────────────────────
 @Composable
@@ -112,11 +112,7 @@ fun HueBar(hue: Float, onHueChange: (Float) -> Unit, modifier: Modifier = Modifi
 fun ColorPickerPopup(
     initialColor: Color?,
     onColorChanged: (Color) -> Unit,
-    onDismissRequest: () -> Unit,
-    // Opacity is owned by DrawingScreen and shared with the sidebar slider.
-    // Pass it in so both controls always show the same value.
-    externalAlpha: Float = initialColor?.alpha ?: 1f,
-    onAlphaChange: (Float) -> Unit = {}
+    onDismissRequest: () -> Unit
 ) {
     val originalColor = remember { initialColor ?: Color.Black }
     val initialHsv = remember {
@@ -128,8 +124,7 @@ fun ColorPickerPopup(
     var saturation    by remember { mutableFloatStateOf(initialHsv[1]) }
     var brightness    by remember { mutableFloatStateOf(initialHsv[2]) }
     var hasInteracted by remember { mutableStateOf(initialColor != null) }
-    // Use externalAlpha as the source of truth — no local alpha state
-    val alpha = externalAlpha
+    val alpha = 1f
     val currentColor  = Color.hsv(hue, saturation, brightness, alpha)
 
     LaunchedEffect(initialColor) {
@@ -179,49 +174,6 @@ fun ColorPickerPopup(
                             Modifier.fillMaxWidth().height(20.dp)
                         )
                     }
-                    Column(
-                        Modifier.fillMaxHeight(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        val density = LocalDensity.current
-                        AssetVerticalSlider(
-                            value             = alpha,
-                            onValueChange     = { a ->
-                                onAlphaChange(a)
-                                if (hasInteracted) onColorChanged(Color.hsv(hue, saturation, brightness, a))
-                            },
-                            valueRange        = 0f..1f,
-                            trackLength       = 212.dp,
-                            trackThickness    = 20.dp,
-                            backgroundContent = {
-                                val image       = ImageBitmap.imageResource(R.drawable.opacity_background)
-                                val bgColor     = Color.hsv(hue, saturation, brightness)
-                                val patternSize = 48.dp
-                                val shader = remember(image, patternSize) {
-                                    val bmp    = image.asAndroidBitmap()
-                                    val tilePx = with(density) { patternSize.toPx() }
-                                    BitmapShader(bmp, AndroidShader.TileMode.REPEAT, AndroidShader.TileMode.REPEAT)
-                                        .also { it.setLocalMatrix(Matrix().apply { setScale(tilePx / bmp.width, tilePx / bmp.width) }) }
-                                }
-                                Canvas(Modifier.fillMaxSize()) {
-                                    drawIntoCanvas { canvas ->
-                                        canvas.nativeCanvas.drawRect(
-                                            0f, 0f, size.width, size.height,
-                                            android.graphics.Paint().apply { this.shader = shader }
-                                        )
-                                    }
-                                    drawRect(
-                                        Brush.linearGradient(
-                                            listOf(bgColor.copy(alpha = 0f), bgColor.copy(alpha = 1f)),
-                                            Offset.Zero, Offset(size.width, 0f)
-                                        )
-                                    )
-                                }
-                            }
-                        )
-                        Spacer(Modifier.height(20.dp))
-                    }
                 }
                 Spacer(Modifier.height(20.dp))
                 Row(Modifier.fillMaxWidth().height(48.dp)) {
@@ -235,7 +187,6 @@ fun ColorPickerPopup(
                                 android.graphics.Color.colorToHSV(originalColor.toArgb(), arr)
                                 if (arr[2] > 0f) { hue = arr[0]; saturation = arr[1] }
                                 brightness = arr[2]
-                                onAlphaChange(originalColor.alpha)
                                 hasInteracted = true; onColorChanged(originalColor)
                             }
                     )

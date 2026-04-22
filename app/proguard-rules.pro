@@ -26,9 +26,9 @@
 # accessed directly (no reflection, but the Java/Kotlin interop and
 # CanvasFrontBufferedRenderer callbacks use class references that R8
 # might otherwise inline or remove).
--keep class com.example.ZeroMark.Canvas.** { *; }
--keep class com.example.ZeroMark.Brushes.** { *; }
--keep class com.example.ZeroMark.tools.** { *; }
+-keep class com.example.zeromark.Canvas.** { *; }
+-keep class com.example.zeromark.Brushes.** { *; }
+-keep class com.example.zeromark.tools.** { *; }
 
 # Preserve line numbers for crash reporting (optional but recommended)
 -keepattributes SourceFile,LineNumberTable

@@ -1,8 +1,6 @@
-package com.example.ZeroMark.Brushes;
+package com.example.zeromark.brushes;
 
 import android.graphics.Color;
-
-import com.example.ZeroMark.tools.Shape;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -34,7 +32,6 @@ public class ToolManager {
 
     private final List<BrushDescriptor> brushList  = new ArrayList<>();
     private final List<BrushDescriptor> eraserList = new ArrayList<>();
-    private final List<Shape>           shapeList  = new ArrayList<>();
 
     private ToolManager() {
         brushList.add(BrushDescriptor.inkPen());
@@ -57,7 +54,6 @@ public class ToolManager {
                 .blendMode(BrushDescriptor.BlendMode.CLEAR)
                 .build());
 
-        shapeList.add(new Shape(Color.BLACK, Shape.ShapeType.RECTANGLE));
     }
 
     // ─── Active tool access ───────────────────────────────────────
@@ -87,11 +83,9 @@ public class ToolManager {
         }
     }
 
-    public Shape getActiveShape() { return shapeList.get(activeIndex.get()); }
 
     // ─── List access (for UI) ─────────────────────────────────────
 
     public List<BrushDescriptor> getBrushList()  { return brushList; }
     public List<BrushDescriptor> getEraserList() { return eraserList; }
-    public List<Shape> getShapeList()  { return shapeList; }
 }

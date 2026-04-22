@@ -1,4 +1,4 @@
-package com.example.ZeroMark.ui
+package com.example.zeromark.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -16,7 +16,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.ZeroMark.R
+import com.example.zeromark.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

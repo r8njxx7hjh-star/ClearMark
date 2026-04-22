@@ -2,14 +2,15 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
+    id("kotlin-parcelize")
 }
 
 android {
-    namespace = "com.example.ZeroMark"
+    namespace = "com.example.zeromark"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.ZeroMark"
+        applicationId = "com.example.zeromark"
         minSdk = 35
         targetSdk = 35
         versionCode = 1

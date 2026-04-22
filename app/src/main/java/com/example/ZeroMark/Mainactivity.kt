@@ -1,4 +1,4 @@
-package com.example.ZeroMark
+package com.example.zeromark
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -9,7 +9,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import com.example.ZeroMark.ui.DrawingScreen
+import androidx.compose.runtime.*
+import com.example.zeromark.model.CanvasSettings
+import com.example.zeromark.ui.CanvasSelectionScreen
+import com.example.zeromark.ui.DrawingScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -23,7 +26,15 @@ class MainActivity : ComponentActivity() {
         windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
 
         setContent {
-            DrawingScreen()
+            var canvasSettings by remember { mutableStateOf<CanvasSettings?>(null) }
+            
+            if (canvasSettings == null) {
+                CanvasSelectionScreen { settings ->
+                    canvasSettings = settings
+                }
+            } else {
+                DrawingScreen(canvasSettings!!)
+            }
         }
     }
 }

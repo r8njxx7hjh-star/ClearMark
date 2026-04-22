@@ -1,4 +1,4 @@
-package com.example.ZeroMark.ui
+package com.example.zeromark.ui
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -22,8 +22,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.ZeroMark.Brushes.ToolManager
-import com.example.ZeroMark.R
+import com.example.zeromark.brushes.ToolManager
+import com.example.zeromark.R
 
 // ── Top Toolbar ───────────────────────────────────────────────────────────────
 @Composable
@@ -38,8 +38,6 @@ fun DrawingToolbar(
     onAddColor: (Color) -> Unit,
     onDeleteColor: (Int) -> Unit,
     onReorderColors: (List<Color>) -> Unit,
-    currentOpacity: Float = 1f,
-    onOpacityChange: (Float) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showColorGrid   by remember { mutableStateOf(false) }
@@ -115,9 +113,7 @@ fun DrawingToolbar(
                 onDeleteColor      = onDeleteColor,
                 onReorderColors    = onReorderColors,
                 onDismiss          = { showColorGrid = false },
-                popupOffset        = IntOffset(x = -16, y = toolbarBottomPx),
-                currentOpacity     = currentOpacity,
-                onOpacityChange    = onOpacityChange
+                popupOffset        = IntOffset(x = -16, y = toolbarBottomPx)
             )
         }
     }
@@ -154,8 +150,6 @@ private fun ToolButton(
 fun DrawingSidebar(
     brushSize: Float,
     onBrushSizeChange: (Float) -> Unit,
-    opacity: Float,
-    onOpacityChange: (Float) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -188,28 +182,6 @@ fun DrawingSidebar(
                     value          = brushSize,
                     onValueChange  = onBrushSizeChange,
                     valueRange     = 1f..100f,
-                    trackLength    = 280.dp,
-                    trackThickness = 8.dp
-                )
-            }
-
-            Box(Modifier.width(32.dp).height(1.dp).background(ColorDivider))
-
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text       = stringResource(R.string.opacity_label),
-                    color      = ColorLabelText,
-                    fontSize   = 8.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines   = 1
-                )
-                AssetVerticalSlider(
-                    value          = opacity,
-                    onValueChange  = onOpacityChange,
-                    valueRange     = 0f..100f,
                     trackLength    = 280.dp,
                     trackThickness = 8.dp
                 )

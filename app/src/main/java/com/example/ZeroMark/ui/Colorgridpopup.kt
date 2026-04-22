@@ -1,4 +1,4 @@
-package com.example.ZeroMark.ui
+package com.example.zeromark.ui
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
-import com.example.ZeroMark.R
+import com.example.zeromark.R
 import kotlin.math.*
 
 private const val COLUMNS  = 3
@@ -49,9 +49,7 @@ fun ColorGridPopup(
     onDeleteColor: (Int) -> Unit,
     onReorderColors: (List<Color>) -> Unit,
     onDismiss: () -> Unit,
-    popupOffset: IntOffset = IntOffset.Zero,
-    currentOpacity: Float = 1f,
-    onOpacityChange: (Float) -> Unit = {}
+    popupOffset: IntOffset = IntOffset.Zero
 ) {
     val density  = LocalDensity.current
     val swatchPx = with(density) { SWATCH.toPx() }
@@ -216,9 +214,7 @@ fun ColorGridPopup(
                     onColorSelected(newIdx)
                 }
             },
-            onDismissRequest = { showColorPicker = false; editingIndex = -1 },
-            externalAlpha    = currentOpacity,
-            onAlphaChange    = onOpacityChange
+            onDismissRequest = { showColorPicker = false; editingIndex = -1 }
         )
     }
 }
