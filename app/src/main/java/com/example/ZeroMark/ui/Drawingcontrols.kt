@@ -38,6 +38,9 @@ fun DrawingToolbar(
     onAddColor: (Color) -> Unit,
     onDeleteColor: (Int) -> Unit,
     onReorderColors: (List<Color>) -> Unit,
+    onSaveClick: () -> Unit,
+    onExportPdfClick: () -> Unit,
+    onHomeClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showColorGrid   by remember { mutableStateOf(false) }
@@ -59,13 +62,33 @@ fun DrawingToolbar(
         verticalAlignment     = Alignment.CenterVertically
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            androidx.compose.material3.Icon(
-                painter            = painterResource(id = R.drawable.house_icon),
-                contentDescription = "Home",
-                tint               = Color.White,
-                modifier           = Modifier.size(32.dp)
-            )
-            Spacer(Modifier.width(12.dp))
+            androidx.compose.material3.IconButton(onClick = onHomeClick) {
+                androidx.compose.material3.Icon(
+                    painter            = painterResource(id = R.drawable.house_icon),
+                    contentDescription = "Home",
+                    tint               = Color.White,
+                    modifier           = Modifier.size(32.dp)
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            androidx.compose.material3.IconButton(onClick = onSaveClick) {
+                androidx.compose.material3.Icon(
+                    painter            = painterResource(id = android.R.drawable.ic_menu_save),
+                    contentDescription = "Save",
+                    tint               = Color.White,
+                    modifier           = Modifier.size(28.dp)
+                )
+            }
+            Spacer(Modifier.width(4.dp))
+            androidx.compose.material3.IconButton(onClick = onExportPdfClick) {
+                androidx.compose.material3.Icon(
+                    painter            = painterResource(id = android.R.drawable.ic_menu_share),
+                    contentDescription = "Export PDF",
+                    tint               = Color.White,
+                    modifier           = Modifier.size(28.dp)
+                )
+            }
+            Spacer(Modifier.width(8.dp))
             Text(
                 text       = stringResource(R.string.canvas_title),
                 color      = Color.White,

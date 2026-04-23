@@ -22,10 +22,30 @@ import com.example.zeromark.brushes.ToolManager
 import com.example.zeromark.canvas.CanvasOverlay
 import com.example.zeromark.canvas.FastDrawingView
 import com.example.zeromark.model.CanvasSettings
+import com.example.zeromark.persistence.CanvasPersistenceManager
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import android.net.Uri
+import com.example.zeromark.canvas.model.Stroke
+import com.example.zeromark.data.Note
+import com.example.zeromark.data.NoteRepository
+import com.example.zeromark.data.Notebook
 
 @Composable
-fun DrawingScreen(canvasSettings: CanvasSettings) {
+fun DrawingScreen(
+    canvasSettings: CanvasSettings,
+    initialStrokes: List<Stroke> = emptyList(),
+    notebook: Notebook? = null,
+    note: Note? = null,
+    onBack: () -> Unit,
+    onHomeClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val repository = remember { NoteRepository(context) }
+    val scope = rememberCoroutineScope()
     var selectedTool       by remember { mutableStateOf(ToolManager.ToolType.PEN) }
     var brushSize          by remember { mutableFloatStateOf(40f) }
     var selectedColorIndex by remember { mutableIntStateOf(0) }
@@ -36,6 +56,43 @@ fun DrawingScreen(canvasSettings: CanvasSettings) {
     
     var zoomLevel by remember { mutableFloatStateOf(1f) }
     var showZoom by remember { mutableStateOf(false) }
+
+    // Use a ref to access the FastDrawingView's CanvasModel for saving
+    var fastDrawingView by remember { mutableStateOf<FastDrawingView?>(null) }
+
+    val saveLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/octet-stream"),
+        onResult = { uri ->
+            uri?.let {
+                fastDrawingView?.let { view ->
+                    scope.launch {
+                        try {
+                            CanvasPersistenceManager.saveCanvas(context, it, view.getCanvasModel(), canvasSettings)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+            }
+        }
+    )
+
+    val pdfExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/pdf"),
+        onResult = { uri ->
+            uri?.let {
+                fastDrawingView?.let { view ->
+                    scope.launch {
+                        try {
+                            CanvasPersistenceManager.exportToPdf(context, it, view.getCanvasModel(), canvasSettings)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+            }
+        }
+    )
 
     LaunchedEffect(zoomLevel) {
         showZoom = true
@@ -96,7 +153,28 @@ fun DrawingScreen(canvasSettings: CanvasSettings) {
                 val currentColor   = colors.getOrNull(selectedColorIndex)
                 colors             = reordered
                 selectedColorIndex = if (currentColor != null) reordered.indexOf(currentColor).coerceAtLeast(0) else 0
-            }
+            },
+            onSaveClick = {
+                if (note != null && notebook != null) {
+                    scope.launch {
+                        try {
+                            val file = repository.getNoteFile(note)
+                            val uri = Uri.fromFile(file)
+                            fastDrawingView?.let { view ->
+                                CanvasPersistenceManager.saveCanvas(context, uri, view.getCanvasModel(), canvasSettings)
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                } else {
+                    saveLauncher.launch("my_drawing.cmark")
+                }
+            },
+            onExportPdfClick = {
+                pdfExportLauncher.launch("my_drawing.pdf")
+            },
+            onHomeClick = onHomeClick
         )
 
         Box(Modifier.fillMaxSize()) {
@@ -105,6 +183,12 @@ fun DrawingScreen(canvasSettings: CanvasSettings) {
                     factory  = { ctx ->
                         android.widget.FrameLayout(ctx).apply {
                             val drawingView = FastDrawingView(ctx, canvasSettings)
+                            fastDrawingView = drawingView
+
+                            if (initialStrokes.isNotEmpty()) {
+                                drawingView.getCanvasModel().restoreStrokes(initialStrokes)
+                            }
+
                             val overlay     = CanvasOverlay(ctx)
                             drawingView.setCanvasOverlay(overlay)
                             drawingView.setZoomListener { zoom -> zoomLevel = zoom }
@@ -160,5 +244,5 @@ fun DrawingScreen(canvasSettings: CanvasSettings) {
 @Preview(showBackground = true, widthDp = 1280, heightDp = 800)
 @Composable
 fun DrawingScreenPreview() {
-    DrawingScreen(CanvasSettings())
+    DrawingScreen(CanvasSettings(), onBack = {}, onHomeClick = {})
 }

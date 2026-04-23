@@ -13,14 +13,40 @@ import androidx.compose.ui.unit.dp
 import com.example.zeromark.model.CanvasSettings
 import com.example.zeromark.model.CanvasType
 import com.example.zeromark.model.GridType
+import com.example.zeromark.persistence.CanvasPersistenceManager
+import com.example.zeromark.canvas.model.Stroke
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CanvasSelectionScreen(onCanvasSelected: (CanvasSettings) -> Unit) {
+fun CanvasSelectionScreen(
+    onCanvasSelected: (CanvasSettings) -> Unit,
+    onCanvasLoaded: (CanvasSettings, List<Stroke>) -> Unit
+) {
+    val context = LocalContext.current
     var selectedType by remember { mutableStateOf(CanvasType.INFINITE) }
     var selectedGrid by remember { mutableStateOf(GridType.BLANK) }
     var widthText by remember { mutableStateOf("1200") }
     var heightText by remember { mutableStateOf("1800") }
+
+    val loadLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+        onResult = { uri ->
+            uri?.let {
+                try {
+                    val settingsOut = arrayOfNulls<CanvasSettings>(1)
+                    val strokes = CanvasPersistenceManager.loadCanvas(context, it, com.example.zeromark.canvas.model.CanvasModel(CanvasSettings()), settingsOut)
+                    if (settingsOut[0] != null) {
+                        onCanvasLoaded(settingsOut[0]!!, strokes)
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    )
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Select Canvas") }) }
@@ -32,6 +58,20 @@ fun CanvasSelectionScreen(onCanvasSelected: (CanvasSettings) -> Unit) {
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Button(
+                onClick = { loadLauncher.launch(arrayOf("application/octet-stream")) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Load Existing (.cmark)")
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Divider()
+            Spacer(Modifier.height(16.dp))
+
+            Text("Or Start New Canvas", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+
             Text("Canvas Type", style = MaterialTheme.typography.titleMedium)
             LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
@@ -87,7 +127,7 @@ fun CanvasSelectionScreen(onCanvasSelected: (CanvasSettings) -> Unit) {
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Start Drawing")
+                Text("Start New Drawing")
             }
         }
     }

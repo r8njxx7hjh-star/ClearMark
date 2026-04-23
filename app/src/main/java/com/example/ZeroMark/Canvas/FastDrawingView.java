@@ -347,6 +347,10 @@ public class FastDrawingView extends SurfaceView implements SurfaceHolder.Callba
         overlay.setViewMatrix(viewMatrix);
     }
 
+    public CanvasModel getCanvasModel() {
+        return canvasModel;
+    }
+
     private void overlayUpdateCursor(float x, float y, float pressure) {
         if (canvasOverlay != null) canvasOverlay.updateCursor(x, y, pressure);
     }

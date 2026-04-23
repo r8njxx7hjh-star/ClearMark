@@ -66,3 +66,13 @@ The eraser is implemented as a "true cutout" system that reveals the underlying 
     *   **Live Feedback:** To achieve real-time cutout feedback, the eraser bypasses the standard hardware front-buffer overlay (which can't perform complex cutouts) and instead forces a full multi-buffer refresh via `frontRenderer.commit()` for every segment in `wireInputHandler`.
     *   **Thread Safety:** `StrokeRenderer` utilizes `ThreadLocal<Paint>` objects. This ensures that concurrent rendering operations (live preview on the renderer thread vs. tile baking on background threads) do not interfere with each other's paint configurations, preventing color corruption.
 *   **Why it works:** This hybrid approach provides the mathematical correctness of software-based `CLEAR` operations with the visual performance of hardware acceleration, resulting in a seamless "what you see is what you erase" experience.
+
+### NoteBook & Persistence System
+The app features a hierarchical storage system using **Notebooks** (folders) and **Notes** (files).
+
+*   **Data Models:** `Notebook` and `Note` represent the hierarchy.
+*   **NoteRepository:** Manages physical directory creation and metadata persistence via `metadata.json` in the app's internal storage.
+*   **CanvasPersistenceManager:** Handles the serialization of canvas data to `.cmark` files (JSON with base64 binary point data).
+*   **Automatic Internal Storage:** When a note is created within a Notebook, the Save action writes directly to the app's private storage, enabling a seamless "document management" feel.
+*   **HomeScreen:** The primary landing page for managing Notebooks and browsing individual pages/notes.
+*   **UI Integration:** The Home icon in the `DrawingScreen` allows instant navigation back to the library view, while the Save icon handles both internal persistence and external export.

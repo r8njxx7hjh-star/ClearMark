@@ -103,6 +103,10 @@ public class CanvasModel {
         pendingStrokes.add(stroke);
         
         // Add to spatial index
+        updateSpatialIndex(stroke);
+    }
+
+    private void updateSpatialIndex(Stroke stroke) {
         RectF bounds = stroke.getBounds();
 
         int left = (int) Math.floor(bounds.left / TILE_SIZE);
@@ -131,6 +135,29 @@ public class CanvasModel {
                 }
                 list.add(stroke);
             }
+        }
+    }
+
+    public List<Stroke> getStrokes() {
+        return new ArrayList<>(strokes);
+    }
+
+    public void restoreStrokes(List<Stroke> newStrokes) {
+        synchronized (strokes) {
+            strokes.clear();
+            spatialIndex.clear();
+            tileVersions.clear();
+            tileCache.evictAll();
+            pendingStrokes.clear();
+            
+            strokes.addAll(newStrokes);
+            pendingStrokes.addAll(newStrokes);
+            for (Stroke s : newStrokes) {
+                updateSpatialIndex(s);
+            }
+        }
+        if (onTileUpdatedListener != null) {
+            onTileUpdatedListener.onTileUpdated();
         }
     }
 
